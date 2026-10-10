@@ -1,0 +1,17 @@
+[package]
+name = "peekguard"
+version = "0.1.0"
+edition = "2021"
+description = "Bind any window; hide it when the mouse leaves, restore it when the mouse comes back."
+license = "MIT"
+
+[[bin]]
+name = "peekguard"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
