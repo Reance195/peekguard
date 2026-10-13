@@ -1,144 +1,278 @@
 # PeekGuard
 
-绑定任意窗口，鼠标移开自动隐身，鼠标移回自动恢复。
+English | [简体中文](README.zh-CN.md)
 
-这就是 QQ「防窥小窗」的那个行为，但作用于**任何**窗口，不只是 QQ。
+[![CI](https://github.com/Reance195/peekguard/actions/workflows/ci.yml/badge.svg)](https://github.com/Reance195/peekguard/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+Bind any window. The mouse leaves — it disappears. The mouse comes back — it returns.
+
+This is the behaviour of QQ's "privacy peek window" in China, applied to *any* window
+instead of just QQ.
 
 ```
-鼠标在窗口里                鼠标移开 350ms 后           鼠标移回原位置
+cursor inside the window      350 ms after it left         cursor returns
 ┌──────────────┐           ┌──────────────┐           ┌──────────────┐
-│  聊天窗口     │   ────>   │  （完全透明）  │   ────>   │  聊天窗口     │
-│  正常显示     │           │  屏幕上看不见  │           │  恢复显示     │
+│  chat window  │   ────>   │  fully clear  │   ────>   │  chat window  │
+│  as normal    │           │  nothing on   │           │  back to      │
+│               │           │  screen       │           │  normal       │
 └──────────────┘           └──────────────┘           └──────────────┘
 ```
 
-## 启动
+- **Zero dependencies** — standard library and hand-written Win32 FFI only. Nothing
+  from crates.io.
+- **One file** — a ~260 KB exe. No installer. Lives in the tray.
+- **Zero intrusion** — no injection, no subclassing, no global hooks. The target
+  process is never touched.
+- **Never leaves a mess** — a crash, a task-manager kill, or an abnormal exit all get
+  your windows restored on the next launch.
+- **Standing rules** — write one `rule =` line and PeekGuard figures out which windows
+  to protect on its own.
 
-单文件 exe，无需安装：
+> Windows only (x86_64).
 
+## Download
+
+Grab `peekguard.exe` from the [Releases](../../releases). Run it — there is nothing to
+install.
+
+## Build from source
+
+Requires Rust 1.87 or newer (the code uses `is_multiple_of`):
+
+```sh
+git clone https://github.com/Reance195/peekguard.git
+cd peekguard
+cargo build --release      # -> target/release/peekguard.exe
 ```
-target\release\peekguard.exe
-```
 
-首次运行会在 `%APPDATA%\PeekGuard\peekguard.conf` 生成默认配置。
-启动后进入系统托盘，没有主窗口。
+On first run a default config is written to `%APPDATA%\PeekGuard\peekguard.conf`.
+PeekGuard then sits in the tray; it has no main window.
 
-## 用法
+## Usage
 
-| 操作 | 快捷键 |
+| Action | Hotkey |
 |---|---|
-| 绑定 / 解绑当前前台窗口 | `Ctrl+Alt+P` |
-| 立即隐身 / 恢复 | `Ctrl+Alt+H` |
-| 切换锁存模式 | `Ctrl+Alt+L` |
+| Bind / unbind the foreground window | `Ctrl+Alt+P` |
+| Hide / restore right now | `Ctrl+Alt+H` |
+| Toggle latch mode | `Ctrl+Alt+L` |
 
-托盘图标：
+Tray icon:
 
-- **双击** = 绑定 / 解绑当前前台窗口
-- **右键** = 完整菜单（隐身方式、延迟、锁存、存规则、重载配置、退出）
+- **Double-click** — bind / unbind the foreground window
+- **Right-click** — full menu (hide strategy, rule auto-protection, delay, latch,
+  save rule, run at login, reload config, quit)
 
-### 典型流程
+### The usual flow
 
-1. 切到你想保护的窗口（QQ、浏览器、股票软件……）
-2. 按 `Ctrl+Alt+P` 绑定 —— 托盘提示「已绑定: QQ.exe — 我的聊天窗口」
-3. 鼠标移开，窗口自动隐身；鼠标移回原位置，窗口自动恢复
-4. 觉得好用，托盘右键 →「把当前绑定存为常驻规则」，以后这个程序一打开就自动受保护
+1. Switch to the window you want guarded (QQ, a browser, your stock app…)
+2. Press `Ctrl+Alt+P` — the tray reports `bound: QQ.exe — my chat window`
+3. Move the mouse away and the window hides; move back to the same spot and it returns
+4. If you like it, tray → "save the current binding as a standing rule" and every
+   launch from now on is guarded automatically
 
-## 三种隐身方式
+## Three hide strategies
 
-托盘右键 →「隐身方式」循环切换。
+Cycle them from tray → "hide strategy".
 
-| 方式 | 做法 | 适用 |
+| Strategy | How | Good for |
 |---|---|---|
-| **透明** (默认) | 把窗口设为 0 透明度 | 最平滑，恢复位置完全不变，能挡住旁边人的视线 |
-| **移出屏幕** | 把窗口挪到虚拟屏外 | 最彻底：连 Alt-Tab 缩略图里都看不到内容 |
-| **隐藏窗口** | `ShowWindow(SW_HIDE)` | 兼容性最好，但任务栏按钮会留着 |
+| **alpha** (default) | set the window to zero transparency | smoothest; the geometry is untouched on restore; enough to block the view next to you |
+| **move** | shove the window off the virtual screen | the most thorough — even the Alt-Tab thumbnail shows nothing |
+| **hide** | `ShowWindow(SW_HIDE)` | widest compatibility, at the cost of leaving a taskbar button |
 
-> 透明模式下窗口依然能被点击。这是刻意的——你可以在"隐形"状态下继续用它。
+> In alpha mode the window still accepts clicks. That is deliberate: you can keep
+> using the window while it is invisible.
 
-## 锁存模式
+## Latch mode
 
-`Ctrl+Alt+L` 开关，或配置文件里 `latch = true`。
+Toggle with `Ctrl+Alt+L`, or set `latch = true` in the config.
 
-开启后：窗口一旦隐身，**鼠标移回来也不会自动显示**，只能用 `Ctrl+Alt+H` 或托盘手动恢复。
+Once latched, a hidden window stays hidden even when the mouse comes back. Only
+`Ctrl+Alt+H` or the tray menu will bring it back.
 
-这是给"领导已经站在你旁边"的场景准备的。否则你鼠标一挪回去，窗口当着人家的面又弹出来了。
+This is for the case where someone is already standing next to you. Otherwise you
+move the mouse back and the window pops up in front of them.
 
-## 配置文件
+## Standing rules (automatic protection)
 
-`%APPDATA%\PeekGuard\peekguard.conf`，也可以用环境变量 `PEEKGUARD_CONFIG` 指向别处。
-改完在托盘菜单点「重载配置」生效。
+Once you write a `rule =` line, PeekGuard rescans the window list once a second and
+takes over any window that matches — **no manual binding, ever again**. Handy for
+"QQ should always be guarded when it opens".
+
+The scan picks one target per pass, in this order:
+
+1. A match that is the foreground window wins — whatever you are looking at gets
+   guarded first
+2. Otherwise the topmost match in z-order
+3. **Minimized windows are skipped.** They cannot be hidden at all, so parking the
+   guard on one would leave every other match unprotected. A minimized window is
+   reselected the moment it is restored, so skipping loses nothing.
+
+A matched window gets a one-off "can you actually hide?" check up front. If it truly
+refuses (typically an elevated target), PeekGuard says so once and remembers that
+window — **no per-second retry spam**, and no hide/restore flapping.
+
+> Two different things, on purpose: a window that gets *minimized after* being guarded
+> keeps its binding (PeekGuard does not hop to another target); point 3 above is only
+> about the scanner **choosing** a new target.
+
+### Turning it off
+
+Tray menu → "rule auto-protection", with a checkmark. Turning it off affects only the
+rules — manual binding keeps working.
+
+### What unbind actually means
+
+This trips people up, so it is spelled out. Unbinding (`Ctrl+Alt+P`, or "unbind the
+current window" from the menu) applies to **that one window** — it does not switch off
+the rule:
+
+| Action | The window you unbound | Later windows of the same kind |
+|---|---|---|
+| Unbind the current window | stays released; the rule does not take it back | guarded as usual |
+| Turn "rule auto-protection" off in the menu | released immediately | unguarded until you turn it back on |
+| Reload config | everything is recomputed | guarded as usual |
+
+The reasoning: what you usually want is not "disable this rule" but "leave this one
+alone". If unbinding also disabled the rule, unbinding QQ once would mean QQ is never
+guarded again for the rest of the session — which is clearly not what anyone means.
+
+## Run at login
+
+Tray menu → "start with Windows", with a checkmark (read live from the registry, not
+cached).
+
+It writes a single `PeekGuard` value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, pointing at the full path of the
+current exe (quoted, so spaces are fine). The registry rather than the Startup folder or
+Task Scheduler: no elevation, no console window flash, no watchdog process.
+
+If you move the exe the checkmark stays on (it matches by name) — untick and re-tick it
+once to repoint it at the new location.
+
+## Configuration
+
+`%APPDATA%\PeekGuard\peekguard.conf`, or point `PEEKGUARD_CONFIG` somewhere else.
+Reload it from the tray menu after editing.
 
 ```ini
-# 鼠标离开窗口后等待多少毫秒才隐身（防抖，避免鼠标一抖就闪）
+# ms to wait after the cursor leaves before hiding (debounce, so a shaky
+# mouse does not make the window flicker)
 delay_ms = 350
 
-# 判定"鼠标在窗口内"时四周额外给的像素余量
+# px of slack around the window rect when testing whether the cursor is inside
 margin_px = 6
 
-# 隐身方式: alpha(透明) | move(移出屏幕) | hide(隐藏窗口)
+# hide strategy: alpha | move | hide
 mode = alpha
 
-# alpha 模式下的透明度，0 = 完全不可见
+# opacity used in alpha mode (0 = invisible)
 alpha = 0
 
-# true = 隐身之后必须手动恢复
+# true = stay hidden after hiding; restore manually
 latch = false
 
-# true = 只在目标窗口是前台窗口时才响应鼠标
+# true = only react to the cursor while the target is the foreground window
 hide_only_when_focused = false
 
-# 已经最小化的窗口不处理
+# already-minimized windows are skipped
+# deprecated: the behaviour is now unconditional (a minimized window cannot be
+# hidden anyway). The key is kept so old configs do not warn; the value has no
+# effect.
 skip_minimized = true
 
-# 启动时自动绑定的窗口（可留空）
+# windows bound automatically at startup (may be empty)
 autobind =
 
-# 常驻规则：窗口出现时自动纳入保护
-# 字段用 | 分隔；title 内用 , 表示"或"
+# standing rules: automatically guard matching windows when they appear
+# fields are separated by | ; inside title:, commas mean "or"
 rule = process:QQ.exe
-rule = process:msedge.exe | title:小说,股票
+rule = process:msedge.exe | title:novel,stocks
 ```
 
-规则字段：`process:`（进程名，忽略大小写）、`class:`（窗口类名）、`title:`（标题子串，逗号分隔表示"或"）。
-同一行内的多个字段是**与**关系。
+Rule fields: `process:` (process name, case-insensitive), `class:` (window class name),
+`title:` (title substring; comma-separated values mean "or"). Multiple fields on one line
+are combined with **AND**.
 
-## 已知限制
+## Known limitations
 
-| 情况 | 表现 | 说明 |
+| Situation | Behaviour | Notes |
 |---|---|---|
-| 目标以管理员身份运行 | 拒绝操作并提示 | Windows 的 UIPI 机制，提权进程的窗口不接受普通进程修改。**用管理员身份启动 PeekGuard 即可解决** |
-| UWP 应用（设置、照片、计算器） | 可能无效 | 这类窗口由 `ApplicationFrameHost` 托管，实际窗口句柄不是你所看到的那个 |
-| 使用 `UpdateLayeredWindow` 的程序 | 透明模式无效 | 自动检测；换「移出屏幕」方式即可 |
-| 目标程序自己重设窗口样式 | 会被"治好" | 需要重新隐身 |
-| 多显示器 / 负坐标 | 已处理 | 坐标基于虚拟屏空间，并启用 per-monitor DPI awareness |
+| Target runs elevated | refused, with a message | Windows UIPI: an elevated process's windows cannot be modified by a normal one. **Run PeekGuard elevated and this goes away** |
+| UWP apps (Settings, Photos, Calculator) | may not work | these are hosted by `ApplicationFrameHost`; the real window handle is not the one you see |
+| Programs using `UpdateLayeredWindow` | alpha mode is inert | detected automatically; switch to "move" instead |
+| The target restyles its own window | PeekGuard "heals" it | hide once more |
+| Multiple monitors / negative coordinates | handled | geometry is in virtual-screen space, and per-monitor DPI awareness is on |
 
-### 安全边界
+### Safety boundaries
 
-- **不注入、不子类化、不装全局钩子**——只用 `GetCursorPos` 每 40ms 轮询做几何判断，对目标进程零侵入
-- 不用 DWM cloak：实测跨进程调用返回 `E_ACCESSDENIED`（见 `docs/specs`）
-- **退出前一定恢复**：正常退出、托盘退出都会先还原所有窗口
-- **崩溃也不留残局**：每次隐身都写日志到 `hidden.journal`，异常退出后下次启动自动恢复
+- **No injection, no subclassing, no global hooks.** The whole thing is
+  `GetCursorPos` polled every 40 ms plus a geometry test. The target process is never
+  modified.
+- No DWM cloak: cross-process calls to it return `E_ACCESSDENIED` in practice
+  (see [`docs/superpowers/specs`](docs/superpowers/specs/2026-10-10-peekguard-design.md)).
+- **Always restored before exit.** Both a normal quit and the tray's quit path restore
+  every window first.
+- **A crash does not strand your windows.** Every hide is journalled to
+  `hidden.journal`; the next launch restores from it.
+- **Never "hidden with no record".** The journal is written *before* the window is
+  touched. The one unrecoverable state would be "invisible with nothing written down",
+  so the record always hits the disk first. The reverse — one redundant entry — is
+  harmless, because restoring an already-visible window is a no-op. (That invariant is
+  pinned down by 720 high-frequency samples; see
+  [`docs/superpowers/specs`](docs/superpowers/specs/2026-10-10-peekguard-design.md).)
+- **Even a panic restores your windows.** A panic hook runs even under `panic = "abort"`,
+  so the windows go back before the process dies — verified end-to-end by
+  `tests/e2e_panic.py`.
 
-## 开发
+## Development
 
+```sh
+cargo build --release      # -> target/release/peekguard.exe (~260 KB, zero deps)
+cargo test                 # 17 unit tests (no side effects, plus 1 #[ignore] diagnostic)
+
+# end-to-end (moves the real cursor, needs an interactive desktop)
+for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_live.py; done         # 23 checks
+for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_latch.py; done        # 15 checks
+for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_rules.py; done        # 16 checks
+for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_robustness.py; done   # 16 checks
+for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_panic.py; done        # 10 checks
 ```
-cargo build --release      # → target/release/peekguard.exe (~250 KB，零依赖)
-cargo test                 # 8 个单元测试
-python tests/e2e_live.py   # 18 项端到端检查，会移动真实鼠标
-python tests/e2e_latch.py  # 13 项锁存模式检查
-```
 
-`PEEKGUARD_MODE=alpha|move|hide` 切换端到端测试的隐身方式，
-`PEEKGUARD_DEBUG=1` 输出详细日志到 stderr 和 `%APPDATA%\PeekGuard\debug.log`。
+240 end-to-end checks in total, all green (each strategy is certified separately). Every
+suite names its own `PEEKGUARD_MUTEX` single-instance name, so it never fights the
+PeekGuard you already have running; the rules under test pin both `class:` and `title:`
+so they only ever match the suite's own window.
 
-### 结构
+`PEEKGUARD_MODE=alpha|move|hide` selects which hide strategy a suite certifies.
+`PEEKGUARD_DEBUG=1` turns on verbose logging to stderr and
+`%APPDATA%\PeekGuard\debug.log`. The remaining knobs are listed in
+[`tests/README.md`](tests/README.md).
 
-| 文件 | 职责 |
+CI runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`,
+and `cargo build --release`. The end-to-end suites are **not** in CI: they move the real
+mouse and need an interactive desktop.
+
+The build is warning-free. The FFI modules keep their Win32 type names (`HWND`,
+`NOTIFYICONDATAW`, …) on purpose — those `upper_case_acronyms` warnings are allowed
+in place, with a note, because the whole point of a hand-written binding is that it
+can be checked line-by-line against the SDK headers.
+
+### Layout
+
+| File | Role |
 |---|---|
-| `src/win.rs` | 手写 Win32 FFI（零依赖，x86_64 only） |
-| `src/hide.rs` | 隐身原语 + 状态快照 / 无损还原 |
-| `src/watch.rs` | 状态机：鼠标轮询、延迟防抖、锁存 |
-| `src/config.rs` | 配置解析 + 规则匹配 |
-| `src/session.rs` | 崩溃恢复日志 |
-| `src/tray.rs` | 托盘图标 + 菜单 |
-| `src/icon.rs` | 运行时生成图标（无需资源编译器） |
+| `src/win.rs` | hand-written Win32 FFI (zero deps, x86_64 only), including the registry |
+| `src/hide.rs` | hide primitives + state snapshot / lossless restore |
+| `src/watch.rs` | state machine: cursor polling, debounce, latch |
+| `src/rules.rs` | standing-rule scanner: rate limiting, target picking, per-window suppression |
+| `src/config.rs` | config parsing + rule matching |
+| `src/autostart.rs` | run at login (HKCU Run directly, no subprocess) |
+| `src/session.rs` | crash-recovery journal |
+| `src/tray.rs` | tray icon + menu |
+| `src/icon.rs` | icon generated at runtime (no resource compiler needed) |
+
+## License
+
+[MIT](LICENSE) © 2026 PeekGuard contributors

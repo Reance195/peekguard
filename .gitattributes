@@ -1,0 +1,13 @@
+# Normalize line endings in the repository; check out native endings locally.
+* text=auto
+
+*.rs   text
+*.toml text
+*.md   text
+*.yml  text
+*.py   text eol=lf
+
+# Binary-ish assets, if any are ever added.
+*.ico  binary
+*.png  binary
+*.exe  binary

@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Bind any window; hide it when the mouse leaves, restore it when the mouse comes back."
 license = "MIT"
+readme = "README.md"
+rust-version = "1.87"
+repository = "https://github.com/Reance195/peekguard"
+keywords = ["windows", "privacy", "tray", "win32", "no-dependencies"]
+categories = ["gui", "os::windows-apis", "command-line-utilities"]
 
 [[bin]]
 name = "peekguard"
