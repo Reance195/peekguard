@@ -8,7 +8,7 @@ readme = "README.md"
 rust-version = "1.87"
 repository = "https://github.com/Reance195/peekguard"
 keywords = ["windows", "privacy", "tray", "win32", "no-dependencies"]
-categories = ["gui", "os::windows-apis", "command-line-utilities"]
+categories = ["gui", "os::windows-apis"]
 
 [[bin]]
 name = "peekguard"

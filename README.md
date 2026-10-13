@@ -273,6 +273,60 @@ can be checked line-by-line against the SDK headers.
 | `src/tray.rs` | tray icon + menu |
 | `src/icon.rs` | icon generated at runtime (no resource compiler needed) |
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+Every released `peekguard.exe` is built by GitHub Actions from this repository, and
+each release is approved manually before it is signed. A signature therefore means
+"this binary is an automated build of the source in this repository" — not "a human
+audited this code".
+
+### Team roles
+
+| Role | Members | Scope |
+|---|---|---|
+| Authors | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | may change source and CI without further review |
+| Reviewers | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | review every pull request |
+| Approvers | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | approve every signing request |
+
+This is a single-maintainer project, so all three roles currently resolve to the same
+person. The first additional contributor to be merged is expected to take over Reviewer.
+
+### Privacy
+
+**PeekGuard transfers no information to other networked systems.** There is no network
+code in it at all — no telemetry, no update check, no crash reporting. The complete set
+of Win32 APIs it imports is visible in `src/win.rs`; none of them open a socket or an
+internet connection. It ships with zero third-party dependencies
+(`Cargo.toml` has no `[dependencies]` section).
+
+Everything it writes is local, and the full list is here:
+
+| Path | What | When |
+|---|---|---|
+| `%APPDATA%\PeekGuard\peekguard.conf` | configuration | written on first run; overridable via `PEEKGUARD_CONFIG`, or a `peekguard.conf` placed next to the exe |
+| `%APPDATA%\PeekGuard\hidden.journal` | crash-recovery journal | only while windows are hidden; removed once they are restored |
+| `%APPDATA%\PeekGuard\debug.log` | diagnostic log | only when `PEEKGUARD_DEBUG=1` |
+
+The tray icon is generated at runtime and is never written to disk.
+
+The one system change PeekGuard can make is a `PeekGuard` value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, and only after you opt in through
+the "start with Windows" tray item. Unticking that item deletes the value.
+
+It never injects code, subclasses a window, or installs a global hook. The only
+cross-process calls it makes are `PROCESS_QUERY_LIMITED_INFORMATION`, used to read a
+window's process name for `rule = process:…` matching and to detect an elevated target.
+
+### Uninstallation
+
+1. Tray → quit
+2. If "start with Windows" is ticked, untick it — this removes the registry value
+3. Delete the exe
+4. Delete `%APPDATA%\PeekGuard\`
+
 ## License
 
 [MIT](LICENSE) © 2026 PeekGuard contributors

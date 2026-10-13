@@ -238,6 +238,57 @@ SDK 头文件逐行对得上，改名反而更难核对。
 | `src/tray.rs` | 托盘图标 + 菜单 |
 | `src/icon.rs` | 运行时生成图标（无需资源编译器） |
 
+## 代码签名策略（Code signing policy）
+
+[SignPath.io](https://about.signpath.io) 提供免费签名服务，证书由
+[SignPath Foundation](https://signpath.org) 签发。
+
+> Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+
+每个发布的 `peekguard.exe` 都由本仓库的 GitHub Actions 构建，每次发布需人工审批后才签名。
+因此签名所代表的含义是「该二进制文件是本仓库源码的自动化构建产物」，而不是「有人人工审计过这份代码」。
+
+### 团队角色
+
+| 角色 | 成员 | 职责 |
+|---|---|---|
+| Authors | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | 可直接修改源码与 CI，无需额外评审 |
+| Reviewers | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | 评审每一个 Pull Request |
+| Approvers | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | 审批每一次签名请求 |
+
+这是单人维护项目，三种角色目前都指向同一个人。第一个被合并进来的外部贡献者将接管 Reviewer。
+
+### 隐私
+
+**PeekGuard 不会向任何网络系统传输信息。** 它完全没有网络代码 —— 无遥测、无更新检查、无崩溃上报。
+`src/win.rs` 里列出了它导入的全部 Win32 API，其中没有任何一个用于打开套接字或网络连接。
+项目零第三方依赖（`Cargo.toml` 没有 `[dependencies]` 段）。
+
+它写入的文件全部在本地，完整清单如下：
+
+| 路径 | 内容 | 写入时机 |
+|---|---|---|
+| `%APPDATA%\PeekGuard\peekguard.conf` | 配置文件 | 首次运行时写入；可用 `PEEKGUARD_CONFIG`，或放在 exe 同目录的 `peekguard.conf` 覆盖 |
+| `%APPDATA%\PeekGuard\hidden.journal` | 崩溃恢复日志 | 仅在窗口处于隐身状态时存在；窗口恢复后删除 |
+| `%APPDATA%\PeekGuard\debug.log` | 诊断日志 | 仅当 `PEEKGUARD_DEBUG=1` 时 |
+
+托盘图标是运行时生成的，不会落盘。
+
+PeekGuard 唯一可能对系统的修改，是在
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下写一个 `PeekGuard` 值，
+且仅在你通过托盘菜单的 "start with Windows" 主动勾选后才会发生。取消勾选即删除该值。
+
+它不会注入代码、不对窗口做子类化、不安装全局钩子。唯一的跨进程调用是
+`PROCESS_QUERY_LIMITED_INFORMATION`，用于读取窗口的进程名以匹配 `rule = process:…`，
+以及判断目标进程是否以管理员权限运行。
+
+### 卸载
+
+1. 托盘菜单 → 退出
+2. 若勾选了 "start with Windows"，取消勾选（这一步会删除注册表值）
+3. 删除 exe
+4. 删除 `%APPDATA%\PeekGuard\`
+
 ## License
 
 [MIT](LICENSE) © 2026 PeekGuard contributors
