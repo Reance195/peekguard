@@ -4,22 +4,23 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
 mod config;
 mod hide;
 mod icon;
+mod rules;
 mod session;
 mod tray;
 mod watch;
 mod win;
 
-use config::{Config, Rule};
-use std::ffi::c_void;
+use config::{Config, HideMode, Rule};
 use tray::*;
 use watch::{State, Watcher};
 use win::*;
 
 const CLASS_NAME: &str = "PeekGuard.MessageWindow.v1";
-const TICK_MS: u32 = 40; // 25 Hz cursor polling: invisible CPU cost, snappy feel
+const TICK_MS: u32 = 16; // 62 Hz cursor polling: invisible CPU cost, no felt lag
 
 const HOTKEY_BIND: i32 = 1;
 const HOTKEY_TOGGLE: i32 = 2;
@@ -28,6 +29,8 @@ const HOTKEY_LATCH: i32 = 3;
 /// Global app state, owned by the message loop and reached from the window proc.
 struct App {
     watcher: Watcher,
+    /// Finds rule-matched windows and hands them to the watcher.
+    scanner: rules::Scanner,
     tray: Option<Tray>,
     hwnd: HWND,
 }
@@ -42,18 +45,30 @@ fn app() -> &'static mut App {
 /// %APPDATA%\PeekGuard\debug.log so a GUI build can be troubleshot too.
 pub fn dbg_log(args: std::fmt::Arguments) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let on = *ENABLED.get_or_init(|| std::env::var("PEEKGUARD_DEBUG").map(|v| v == "1").unwrap_or(false));
+    let on = *ENABLED.get_or_init(|| {
+        std::env::var("PEEKGUARD_DEBUG")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    });
     if !on {
         return;
     }
-    let line = format!("[{:>8}ms] {}
-", tick_ms(), args);
+    let line = format!(
+        "[{:>8}ms] {}
+",
+        tick_ms(),
+        args
+    );
     eprint!("{line}");
     let mut p = Config::config_dir();
     let _ = std::fs::create_dir_all(&p);
     p.push("debug.log");
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p)
+    {
         let _ = f.write_all(line.as_bytes());
     }
 }
@@ -68,12 +83,30 @@ fn main() {
         SetProcessDPIAware();
     }
 
+    // If we panic, the first thing that must happen is putting any hidden window
+    // back. Without this a crash would leave the user staring at a desktop with an
+    // invisible window on it and no clue what happened.
+    install_panic_guard();
+
     // Single instance: a second copy would fight over the same windows.
-    let mutex_name = to_wide("Global\\PeekGuard-SingleInstance");
+    //
+    // A losing copy must never be mistaken for a working one. The check is a
+    // global mutex, so a *test* instance collides with the user's real, running
+    // PeekGuard through no fault of its own; `PEEKGUARD_MUTEX` lets a test name
+    // its own mutex and get a genuinely independent instance. The warning box is
+    // skipped under that variable too: a modal box is right for a double-clicked
+    // shortcut, but in a test it would hang the run while looking like a guard
+    // bug (the process stays alive and simply never hides anything).
+    let mutex_name = std::env::var("PEEKGUARD_MUTEX")
+        .map(|n| format!("Global\\{n}"))
+        .unwrap_or_else(|_| "Global\\PeekGuard-SingleInstance".to_string());
+    let mutex_name = to_wide(&mutex_name);
     unsafe {
         let h = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
         if h.is_null() || error_already_exists() {
-            message_box("PeekGuard 已经在运行了（看托盘图标）。", "PeekGuard", 0x40);
+            if std::env::var("PEEKGUARD_MUTEX").is_err() {
+                message_box("PeekGuard 已经在运行了（看托盘图标）。", "PeekGuard", 0x40);
+            }
             return;
         }
     }
@@ -81,7 +114,12 @@ fn main() {
     let recovered = session::replay();
     let (cfg, note) = Config::load();
 
-    let mut state = App { watcher: Watcher::new(cfg), tray: None, hwnd: std::ptr::null_mut() };
+    let mut state = App {
+        watcher: Watcher::new(cfg),
+        scanner: rules::Scanner::new(),
+        tray: None,
+        hwnd: std::ptr::null_mut(),
+    };
     unsafe {
         APP = &mut state;
     }
@@ -95,13 +133,17 @@ fn main() {
         (*APP).hwnd = hwnd;
     }
 
-    let hicon = icon::create_icon(32).or_else(|| icon::create_icon(16)).unwrap_or_else(icon::stock_icon);
+    let hicon = icon::create_icon(32)
+        .or_else(|| icon::create_icon(16))
+        .unwrap_or_else(icon::stock_icon);
     app().tray = Some(Tray::add(hwnd, hicon, "PeekGuard — 未绑定"));
 
     register_hotkeys(hwnd);
     unsafe {
         SetTimer(hwnd, 1, TICK_MS, std::ptr::null());
     }
+
+    maybe_arm_test_panic();
 
     apply_autobind();
     if recovered > 0 {
@@ -113,13 +155,82 @@ fn main() {
         }
     }
     update_tray();
+    scan_rules();
 
     message_loop();
 }
 
+/// Do the one thing that matters when we die unexpectedly: give the window back.
+fn install_panic_guard() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        unsafe {
+            if !APP.is_null() {
+                let a = &mut *APP;
+                a.watcher.restore();
+                session::write(&[]);
+                if let Some(t) = a.tray.as_mut() {
+                    t.remove();
+                }
+            }
+        }
+        prev(info);
+    }));
+}
+
+/// Pick up rule-matched windows. Runs at the top of the tick, cheap enough that
+/// the 1 Hz rate limit is the only throttling it needs.
+fn scan_rules() {
+    let a = app();
+    if a.watcher.target.is_some() {
+        return;
+    }
+    if !a.scanner.due(tick_ms()) {
+        return;
+    }
+    let Some(hwnd) = a.scanner.find(&a.watcher.cfg) else {
+        return;
+    };
+    if a.watcher.bind(hwnd) {
+        a.scanner.note_bound(hwnd);
+        dbgmsg!(
+            "rule scan bound {:?}",
+            a.watcher.target.as_ref().map(|t| t.describe())
+        );
+        notify(&format!(
+            "已按规则保护: {}",
+            a.watcher
+                .target
+                .as_ref()
+                .map(|t| t.describe())
+                .unwrap_or_default()
+        ));
+        update_tray();
+    }
+}
+
+/// Test-only: `PEEKGUARD_PANIC_AFTER=<ms>` panics asynchronously, to verify that a
+/// crash mid-hide leaves no window stranded. Documented in tests/README.md.
+/// Never set this in normal use — it exists so the recovery path can be tested
+/// on the real binary rather than assumed to work.
+fn maybe_arm_test_panic() {
+    let Ok(ms) = std::env::var("PEEKGUARD_PANIC_AFTER")
+        .unwrap_or_default()
+        .parse::<u64>()
+    else {
+        return;
+    };
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        panic!("PEEKGUARD_PANIC_AFTER test trigger");
+    });
+}
+
 fn apply_autobind() {
     let a = app();
-    let Some(rule) = a.watcher.cfg.autobind.clone() else { return };
+    let Some(rule) = a.watcher.cfg.autobind.clone() else {
+        return;
+    };
     for hwnd in top_level_windows() {
         let pid = process_id(hwnd);
         let proc = process_name(pid);
@@ -134,9 +245,24 @@ fn apply_autobind() {
 
 fn register_hotkeys(hwnd: HWND) {
     unsafe {
-        let a = RegisterHotKey(hwnd, HOTKEY_BIND, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P' as u32);
-        let b = RegisterHotKey(hwnd, HOTKEY_TOGGLE, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'H' as u32);
-        let c = RegisterHotKey(hwnd, HOTKEY_LATCH, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'L' as u32);
+        let a = RegisterHotKey(
+            hwnd,
+            HOTKEY_BIND,
+            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            'P' as u32,
+        );
+        let b = RegisterHotKey(
+            hwnd,
+            HOTKEY_TOGGLE,
+            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            'H' as u32,
+        );
+        let c = RegisterHotKey(
+            hwnd,
+            HOTKEY_LATCH,
+            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            'L' as u32,
+        );
         dbgmsg!(
             "hotkeys registered: bind={} toggle={} latch={} err={}",
             a,
@@ -196,7 +322,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             0
         }
         WM_COMMAND => {
-            on_menu(w as usize);
+            on_menu(w);
             0
         }
         m if m == WM_APP + 1 => {
@@ -255,7 +381,7 @@ fn create_message_window() -> HWND {
             HWND_MESSAGE,
             std::ptr::null_mut(),
             hinst,
-            std::ptr::null_mut() as *mut c_void,
+            std::ptr::null_mut(),
         )
     }
 }
@@ -266,11 +392,15 @@ static TICK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 
 fn on_tick() {
     let a = app();
+    scan_rules();
     let before = a.watcher.state;
+    // Capture the handle: a refused hide clears the binding as part of the action,
+    // so afterwards there is nothing left to read it from.
+    let watched = a.watcher.target.as_ref().map(|t| t.hwnd);
     let action = a.watcher.tick(tick_ms());
     let after = a.watcher.state;
     let n = TICK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if n % 25 == 0 {
+    if n.is_multiple_of(25) {
         let c = cursor_pos();
         let r = a
             .watcher
@@ -302,16 +432,34 @@ fn on_tick() {
     if action == watch::Action::Drop {
         update_tray();
     }
+    if action == watch::Action::Refused {
+        // The window would not accept the hide. Remember which one so the rule
+        // scanner does not pick it straight back up and loop on it.
+        if let Some(h) = watched {
+            a.scanner.suppress(h);
+        }
+        notify("这个窗口拒绝被隐身（可能是管理员权限窗口）——已停止保护它。");
+        session::write(&[]);
+        update_tray();
+    }
     a.watcher.refresh_identity();
 }
 
 fn toggle_bind() {
     let a = app();
-    dbgmsg!("toggle_bind: currently bound={}", a.watcher.target.is_some());
+    dbgmsg!(
+        "toggle_bind: currently bound={}",
+        a.watcher.target.is_some()
+    );
     if a.watcher.target.is_some() {
+        // Release just this window; the rules keep working for others.
+        if let Some(t) = &a.watcher.target {
+            let h = t.hwnd;
+            a.scanner.suppress(h);
+        }
         a.watcher.unbind();
         session::write(&[]);
-        notify("已解绑。");
+        notify("已解绑（这条规则不再接管这个窗口）。");
     } else {
         let fg = unsafe { GetForegroundWindow() };
         dbgmsg!(
@@ -324,7 +472,14 @@ fn toggle_bind() {
         if fg == a.hwnd || !is_valid(fg) {
             notify("找不到可以绑定的前台窗口。");
         } else if a.watcher.bind(fg) {
-            let desc = a.watcher.target.as_ref().map(|t| t.describe()).unwrap_or_default();
+            // Binding by hand overrides any earlier suppression of this window.
+            a.scanner.note_bound(fg);
+            let desc = a
+                .watcher
+                .target
+                .as_ref()
+                .map(|t| t.describe())
+                .unwrap_or_default();
             notify(&format!("已绑定: {desc}"));
         } else {
             notify("这个窗口不支持绑定。");
@@ -366,7 +521,11 @@ fn toggle_latch() {
     }
     let on = a.watcher.cfg.latch;
     let _ = a.watcher.cfg.save();
-    notify(if on { "锁存模式已开启：隐身之后只能手动恢复。" } else { "锁存模式已关闭。" });
+    notify(if on {
+        "锁存模式已开启：隐身之后只能手动恢复。"
+    } else {
+        "锁存模式已关闭。"
+    });
     update_tray();
 }
 
@@ -379,6 +538,9 @@ fn menu_state() -> MenuState {
         latch: a.watcher.cfg.latch,
         delay_ms: a.watcher.cfg.delay_ms,
         is_elevated: is_elevated(),
+        rules: a.watcher.cfg.rules.len(),
+        scan_enabled: !a.scanner.muted(),
+        autostart: autostart::enabled(),
     }
 }
 
@@ -386,12 +548,16 @@ fn on_menu(cmd: usize) {
     match cmd {
         CMD_BIND => toggle_bind(),
         CMD_TOGGLE => toggle_hide(),
-        CMD_MODE => cycle_mode(),
+        CMD_MODE_ALPHA => set_mode(HideMode::Alpha),
+        CMD_MODE_MOVE => set_mode(HideMode::Move),
+        CMD_MODE_HIDE => set_mode(HideMode::Hide),
         CMD_LATCH => toggle_latch(),
+        CMD_SCAN => toggle_scan(),
         CMD_DELAY_DOWN => adjust_delay(-50),
         CMD_DELAY_UP => adjust_delay(50),
         CMD_SAVE_RULE => save_rule(),
         CMD_UNBIND_ALL => unbind_all(),
+        CMD_AUTOSTART => toggle_autostart(),
         CMD_RELOAD => reload_config(),
         CMD_OPEN_CONFIG => open_config(),
         CMD_ABOUT => about(),
@@ -405,8 +571,37 @@ fn on_menu(cmd: usize) {
     }
 }
 
-fn cycle_mode() {
+/// Pause / resume rule-driven protection.
+fn toggle_scan() {
     let a = app();
+    let now_muted = !a.scanner.muted();
+    a.scanner.set_muted(now_muted);
+    notify(if now_muted {
+        "已暂停规则自动保护（手动绑定不受影响）。"
+    } else {
+        "规则自动保护已恢复。"
+    });
+    update_tray();
+}
+
+fn toggle_autostart() {
+    let enable = !autostart::enabled();
+    match autostart::set(enable) {
+        Ok(_) => notify(if enable {
+            "已设置开机自动启动。"
+        } else {
+            "已取消开机自动启动。"
+        }),
+        Err(e) => notify(&format!("设置失败: {e}")),
+    }
+    update_tray();
+}
+
+fn set_mode(mode: HideMode) {
+    let a = app();
+    if a.watcher.cfg.mode == mode {
+        return;
+    }
     // Refuse to switch when the bound target already rejects outside style edits,
     // so the user doesn't discover a broken mode when the boss walks in.
     if let Some(t) = &a.watcher.target {
@@ -416,9 +611,9 @@ fn cycle_mode() {
             return;
         }
     }
-    a.watcher.cfg.mode = a.watcher.cfg.mode.next();
+    a.watcher.cfg.mode = mode;
     let _ = a.watcher.cfg.save();
-    notify(&format!("隐身方式: {}", tray::mode_name(a.watcher.cfg.mode)));
+    notify(&format!("隐身方式: {}", tray::mode_name(mode)));
     update_tray();
 }
 
@@ -439,21 +634,36 @@ fn save_rule() {
     };
     // Prefer process+class: titles change constantly, but a title fragment is what
     // usually distinguishes "the chat window" from "the settings window".
-    let rule = Rule { process: Some(t.process.clone()), class: Some(t.class.clone()), title: None };
+    let rule = Rule {
+        process: Some(t.process.clone()),
+        class: Some(t.class.clone()),
+        title: None,
+    };
     a.watcher.cfg.add_rule(rule.clone());
+    // Saving a rule is an explicit request for automatic protection.
+    a.scanner.set_muted(false);
     match a.watcher.cfg.save() {
         Ok(_) => notify(&format!("已存为常驻规则: {}", rule.describe())),
         Err(e) => notify(&format!("保存配置失败: {e}")),
     }
+    update_tray();
 }
-
-/// Drop every active binding, restoring whatever was hidden.
+/// Drop the active binding, restoring whatever was hidden. Rule protection keeps
+/// running for every other window — only the released one is held back.
 fn unbind_all() {
     let a = app();
     let had = a.watcher.target.is_some();
+    if let Some(t) = &a.watcher.target {
+        let h = t.hwnd;
+        a.scanner.suppress(h);
+    }
     a.watcher.unbind();
     session::write(&[]);
-    notify(if had { "已解绑并恢复。" } else { "当前没有绑定任何窗口。" });
+    notify(if had {
+        "已解绑并恢复显示。"
+    } else {
+        "当前没有绑定任何窗口。"
+    });
     update_tray();
 }
 
@@ -466,7 +676,11 @@ fn reload_config() {
         a.watcher.restore();
     }
     a.watcher.cfg = cfg;
-    let msg = note.filter(|n| !n.is_empty()).unwrap_or_else(|| "配置已重载。".to_string());
+    // New rules may legitimately match windows the old set rejected.
+    a.scanner.set_muted(false);
+    let msg = note
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "配置已重载。".to_string());
     notify(&msg);
     update_tray();
 }
@@ -544,16 +758,5 @@ fn notify(text: &str) {
 
 /// All visible top-level windows with a title, used for rule autobind.
 fn top_level_windows() -> Vec<HWND> {
-    let mut out: Vec<HWND> = Vec::new();
-    unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let v = &mut *(lparam as *mut Vec<HWND>);
-        if is_visible(hwnd) && !window_title(hwnd).is_empty() {
-            v.push(hwnd);
-        }
-        1
-    }
-    unsafe {
-        EnumWindows(Some(cb), &mut out as *mut Vec<HWND> as LPARAM);
-    }
-    out
+    win::top_level_windows()
 }

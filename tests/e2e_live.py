@@ -12,6 +12,7 @@ The test moves the real cursor (SetCursorPos). It saves and restores the origina
 position. Set PEEKGUARD_DEBUG=1 for verbose output.
 """
 import ctypes as C
+import itertools
 import os
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import time
 from ctypes import wintypes as W
 
 u32 = C.windll.user32
+k32 = C.windll.kernel32
 
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
@@ -36,6 +38,26 @@ u32.GetLayeredWindowAttributes.argtypes = [
 u32.FindWindowW.argtypes = [C.c_wchar_p, C.c_wchar_p]
 u32.FindWindowW.restype = W.HWND
 u32.PostMessageW.argtypes = [W.HWND, C.c_uint, C.c_size_t, C.c_ssize_t]
+u32.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
+u32.GetWindowThreadProcessId.restype = W.DWORD
+u32.AttachThreadInput.argtypes = [W.DWORD, W.DWORD, W.BOOL]
+u32.AttachThreadInput.restype = W.BOOL
+u32.BringWindowToTop.argtypes = [W.HWND]
+u32.BringWindowToTop.restype = W.BOOL
+k32.GetCurrentThreadId.restype = W.DWORD
+
+# Every suite's PeekGuard spawn must take its own single-instance mutex. Sharing
+# the name with the user's real PeekGuard means the spawned copy loses the mutex,
+# puts up a *modal* "already running" box, and then sits there alive but hiding
+# nothing — which reads as a guard bug and, on a desktop with no one to click OK,
+# hangs the suite outright. A counter keeps concurrently live instances distinct
+# too, so a just-killed one that has not released yet cannot block the next.
+_mutex_seq = itertools.count()
+
+
+def scratch_mutex():
+    """A mutex name private to this test process and this spawn."""
+    return f"PeekGuard-Test-{os.getpid()}-{next(_mutex_seq)}"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXE = os.path.join(os.path.dirname(HERE), "target", "debug", "peekguard.exe")
@@ -117,6 +139,24 @@ def find_target(pid, timeout=8.0):
     return 0
 
 
+def spawn_target(lifetime="120", tries=3):
+    """Spawn a disposable target window and wait for it to really exist.
+
+    Returns `(proc, hwnd)` with a non-zero hwnd, or `(None, 0)` if the window never
+    appeared after `tries` attempts. Drivers should treat a zero hwnd as a hard
+    failure of the phase rather than continuing without a window: every check below
+    would otherwise pass vacuously against a handle that is not there.
+    """
+    for _ in range(tries):
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(HERE, "target_window.py"), str(lifetime)])
+        hwnd = find_target(proc.pid)
+        if hwnd:
+            return proc, hwnd
+        stop_peekguard(proc, hard=True)
+    return None, 0
+
+
 def find_message_window(timeout=5.0):
     """The app window is message-only, so EnumWindows cannot see it: use FindWindowW."""
     cls = C.create_unicode_buffer(MESSAGE_CLASS)
@@ -147,6 +187,66 @@ def send_hotkey():
         u32.keybd_event(vk, 0, 2, 0)
 
 
+def focus_window(hwnd, tries=6):
+    """Give `hwnd` the foreground, retrying until Windows actually agrees.
+
+    `SetForegroundWindow` is allowed to fail: a background process is not normally
+    permitted to steal focus, and the caller is a background process. The standard
+    way around it is to attach to the current foreground thread's input queue, which
+    makes the focus change legal, then detach. Retrying covers the rest (the lock can
+    persist for a moment after a process exits).
+
+    Without this the suites are intermittently wrong for a reason that has nothing to
+    do with PeekGuard: a missed focus change breaks the binding hotkey, which then
+    surfaces as a bogus "not hidden" failure further down. Returns whether the window
+    really did become foreground, so a caller can report it honestly.
+    """
+    for _ in range(tries):
+        if u32.GetForegroundWindow() == hwnd:
+            return True
+        u32.SetForegroundWindow(hwnd)
+        if u32.GetForegroundWindow() == hwnd:
+            return True
+        # Attach to the foreground thread's input queue so the change is permitted.
+        fg = u32.GetForegroundWindow()
+        target_thread = u32.GetWindowThreadProcessId(fg, None)
+        this_thread = k32.GetCurrentThreadId()
+        if target_thread and target_thread != this_thread:
+            if u32.AttachThreadInput(this_thread, target_thread, True):
+                try:
+                    u32.SetForegroundWindow(hwnd)
+                    u32.BringWindowToTop(hwnd)
+                finally:
+                    u32.AttachThreadInput(this_thread, target_thread, False)
+        if u32.GetForegroundWindow() == hwnd:
+            return True
+        time.sleep(0.25)
+    return u32.GetForegroundWindow() == hwnd
+
+
+def bind_target(hwnd, tries=5):
+    """Bind `hwnd` with the real hotkey chord and confirm the bind actually took.
+
+    A synthesised chord can be dropped (another process has the combination, the
+    input queue coalesces it, the window is not foreground yet). Left unchecked that
+    turns into a *later* failure that looks like something else entirely: a test that
+    never bound cannot hide anything, so the crash-recovery checks then fail on a
+    missing journal entry even though recovery is fine. Confirming the bind keeps the
+    hotkey's flakiness out of the checks that are not about the hotkey.
+
+    Verified through `is_hidden` rather than the log, because "it hid" is the thing
+    the rest of the suite depends on.
+    """
+    for _ in range(tries):
+        focus_window(hwnd)
+        time.sleep(0.3)
+        u32.SetCursorPos(2, 2)  # park away, so a successful bind hides promptly
+        send_hotkey()
+        if wait_until(lambda: is_hidden(hwnd), 2.5):
+            return True
+    return False
+
+
 def spawn_peekguard():
     env = dict(os.environ)
     if DEBUG:
@@ -158,6 +258,7 @@ def spawn_peekguard():
     with open(cfg_path, "w", encoding="utf-8") as f:
         f.write("\n".join([f"mode = {MODE}", "delay_ms = 200", "margin_px = 6", "latch = false", ""]))
     env["PEEKGUARD_CONFIG"] = cfg_path
+    env["PEEKGUARD_MUTEX"] = scratch_mutex()
     return subprocess.Popen([EXE], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
 
@@ -197,8 +298,7 @@ def main():
         results.append((name, bool(cond)))
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f"  -- {detail}" if detail else ""))
 
-    target_proc = subprocess.Popen([sys.executable, os.path.join(HERE, "target_window.py"), "180"])
-    hwnd = find_target(target_proc.pid)
+    target_proc, hwnd = spawn_target("180")
     if not hwnd:
         print("FAIL: target window never appeared")
         target_proc.terminate()
@@ -219,13 +319,18 @@ def main():
         print(f"target hwnd={hwnd:#x} rect={base} alpha={alpha_of(hwnd)} exstyle={exstyle(hwnd):#x}")
 
         # --- 1. bind via hotkey
-        u32.SetForegroundWindow(hwnd)
+        focus_window(hwnd)
         time.sleep(0.5)
         check("target is foreground", u32.GetForegroundWindow() == hwnd)
         u32.SetCursorPos(cx, cy)
         time.sleep(0.3)
-        send_hotkey()
-        time.sleep(1.2)
+        check("bind hotkey took effect", bind_target(hwnd), "retries the chord until the window hides once")
+        u32.SetCursorPos(cx, cy)
+        check(
+            "restored when cursor returns after binding",
+            wait_until(lambda: not is_hidden(hwnd), 5.0),
+            f"alpha={alpha_of(hwnd)}",
+        )
         check("peekguard still alive after bind hotkey", pg.poll() is None)
 
         # --- 2. visible while cursor inside
@@ -274,19 +379,26 @@ def main():
         pg2 = spawn_peekguard()
         time.sleep(1.5)
         check("peekguard restarted", pg2.poll() is None)
-        u32.SetForegroundWindow(hwnd)  # rebind: a restart does not remember bindings
-        time.sleep(0.4)
-        u32.SetCursorPos(cx, cy)
-        time.sleep(0.2)
-        send_hotkey()
-        time.sleep(1.0)
-        u32.SetCursorPos(2, 2)
-        check("hidden again before crash test", wait_until(lambda: is_hidden(hwnd), 5.0), f"alpha={alpha_of(hwnd)}")
+        # Rebind: a restart does not remember bindings. Confirmed rather than assumed,
+        # otherwise a dropped hotkey shows up later as a bogus recovery failure.
+        check("rebound for the crash test", bind_target(hwnd), f"alpha={alpha_of(hwnd)}")
+        check("hidden again before crash test", is_hidden(hwnd), f"alpha={alpha_of(hwnd)}")
+        # Recovery is only meaningful if there is something to recover, and the
+        # journal is that something: it is the sole record of "this window is hidden
+        # and must be put back". Establish it explicitly while PeekGuard is still
+        # alive rather than checking for it after the kill, so this is a real
+        # precondition and not a race against the tick that writes it. A journal that
+        # never appears here is a genuine defect (the window would be stranded), and
+        # this check names it plainly instead of letting it surface as a confusing
+        # "recovery failed" further down.
+        check("the hide was journalled before the crash",
+              wait_until(lambda: os.path.exists(JOURNAL), 4.0),
+              f"journal={os.path.exists(JOURNAL)}")
 
         stop_peekguard(pg2, hard=True)
         time.sleep(0.5)
         check("window still hidden after hard kill", is_hidden(hwnd), f"alpha={alpha_of(hwnd)}")
-        check("journal written before crash", os.path.exists(JOURNAL))
+        check("journal still present after the kill", os.path.exists(JOURNAL))
 
         pg3 = spawn_peekguard()
         recovered = wait_until(lambda: not is_hidden(hwnd), 8.0)

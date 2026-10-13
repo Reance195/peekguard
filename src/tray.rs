@@ -8,15 +8,18 @@ pub const TRAY_UID: u32 = 1;
 // menu command ids
 pub const CMD_BIND: usize = 100;
 pub const CMD_TOGGLE: usize = 101;
-pub const CMD_UNBIND: usize = 102;
-pub const CMD_MODE: usize = 110;
+pub const CMD_MODE_ALPHA: usize = 110;
+pub const CMD_MODE_MOVE: usize = 112;
+pub const CMD_MODE_HIDE: usize = 113;
 pub const CMD_LATCH: usize = 111;
 pub const CMD_DELAY_UP: usize = 120;
 pub const CMD_DELAY_DOWN: usize = 121;
 pub const CMD_SAVE_RULE: usize = 130;
 pub const CMD_UNBIND_ALL: usize = 131;
+pub const CMD_SCAN: usize = 132;
 pub const CMD_RELOAD: usize = 140;
 pub const CMD_OPEN_CONFIG: usize = 141;
+pub const CMD_AUTOSTART: usize = 160;
 pub const CMD_ABOUT: usize = 150;
 pub const CMD_QUIT: usize = 199;
 
@@ -27,13 +30,15 @@ pub struct Tray {
 
 impl Tray {
     pub fn add(hwnd: HWND, icon: HICON, tip: &str) -> Tray {
-        let mut data = NOTIFYICONDATAW::default();
-        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        data.hWnd = hwnd;
-        data.uID = TRAY_UID;
-        data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        data.uCallbackMessage = WM_APP + 1;
-        data.hIcon = icon;
+        let mut data = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: TRAY_UID,
+            uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+            uCallbackMessage: WM_APP + 1,
+            hIcon: icon,
+            ..Default::default()
+        };
         set_tip(&mut data, tip);
         let alive = unsafe { Shell_NotifyIconW(NIM_ADD, &data) != 0 };
         Tray { data, alive }
@@ -82,6 +87,11 @@ pub struct MenuState {
     pub latch: bool,
     pub delay_ms: u64,
     pub is_elevated: bool,
+    /// How many `rule =` lines are configured.
+    pub rules: usize,
+    /// Rule scanning is not paused.
+    pub scan_enabled: bool,
+    pub autostart: bool,
 }
 
 /// Show the context menu and return the chosen command id (0 = dismissed).
@@ -99,34 +109,95 @@ pub fn show_menu(menu_owner: HWND, st: &MenuState) -> usize {
         append(menu, MF_STRING, CMD_BIND, &bind_label);
 
         if st.bound.is_some() {
-            let toggle_label = if st.hidden { "恢复显示  (Ctrl+Alt+H)" } else { "立即隐身  (Ctrl+Alt+H)" };
+            let toggle_label = if st.hidden {
+                "恢复显示  (Ctrl+Alt+H)"
+            } else {
+                "立即隐身  (Ctrl+Alt+H)"
+            };
             append(menu, MF_STRING, CMD_TOGGLE, toggle_label);
         }
 
         append(menu, MF_SEPARATOR, 0, "");
 
-        let mode_flags = MF_STRING;
+        let mode_menu = CreatePopupMenu();
+        if mode_menu.is_null() {
+            DestroyMenu(menu);
+            return 0;
+        }
+        for (id, m, desc) in [
+            (
+                CMD_MODE_ALPHA,
+                HideMode::Alpha,
+                "透明  — 最兼容，鼠标穿透保留",
+            ),
+            (
+                CMD_MODE_MOVE,
+                HideMode::Move,
+                "移出屏幕  — 连 Alt+Tab 预览都藏掉",
+            ),
+            (CMD_MODE_HIDE, HideMode::Hide, "隐藏窗口  — 任务栏按钮仍在"),
+        ] {
+            let f = MF_STRING | MF_RADIOCHECK | if m == st.mode { MF_CHECKED } else { 0 };
+            append(mode_menu, f, id, &format!("{}   {}", mode_name(m), desc));
+        }
+        append(menu, MF_POPUP, mode_menu as usize, "隐身方式");
+
+        let scan_flags = if st.scan_enabled {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
         append(
             menu,
-            mode_flags,
-            CMD_MODE,
-            &format!("隐身方式: {}  ▶", mode_name(st.mode)),
+            scan_flags,
+            CMD_SCAN,
+            &format!("规则自动保护（{} 条规则）", st.rules),
         );
 
-        let latch_flags = if st.latch { MF_STRING | MF_CHECKED } else { MF_STRING };
-        append(menu, latch_flags, CMD_LATCH, "锁存模式（只能手动恢复）  (Ctrl+Alt+L)");
+        let latch_flags = if st.latch {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        append(
+            menu,
+            latch_flags,
+            CMD_LATCH,
+            "锁存模式（只能手动恢复）  (Ctrl+Alt+L)",
+        );
 
-        append(menu, MF_STRING, CMD_DELAY_DOWN, &format!("缩短防抖延迟  ({} ms)", st.delay_ms));
-        append(menu, MF_STRING, CMD_DELAY_UP, &format!("延长防抖延迟  ({} ms)", st.delay_ms));
+        append(
+            menu,
+            MF_STRING,
+            CMD_DELAY_DOWN,
+            &format!("缩短防抖延迟  ({} ms)", st.delay_ms),
+        );
+        append(
+            menu,
+            MF_STRING,
+            CMD_DELAY_UP,
+            &format!("延长防抖延迟  ({} ms)", st.delay_ms),
+        );
 
         append(menu, MF_SEPARATOR, 0, "");
 
-        let save_flags = if st.bound.is_some() { MF_STRING } else { MF_STRING | MF_GRAYED };
+        let save_flags = if st.bound.is_some() {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
         append(menu, save_flags, CMD_SAVE_RULE, "把当前绑定存为常驻规则");
 
-        append(menu, save_flags, CMD_UNBIND_ALL, "解绑所有规则命中的窗口");
+        append(menu, save_flags, CMD_UNBIND_ALL, "解绑当前窗口（保留规则）");
         append(menu, MF_STRING, CMD_RELOAD, "重载配置");
         append(menu, MF_STRING, CMD_OPEN_CONFIG, "打开配置文件");
+
+        let startup_flags = if st.autostart {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        append(menu, startup_flags, CMD_AUTOSTART, "开机自动启动");
 
         append(menu, MF_SEPARATOR, 0, "");
 
@@ -150,7 +221,7 @@ pub fn show_menu(menu_owner: HWND, st: &MenuState) -> usize {
             std::ptr::null(),
         );
         PostMessageW(menu_owner, WM_NULL, 0, 0);
-        DestroyMenu(menu);
+        DestroyMenu(menu); // destroys `mode_menu` with it
         cmd as usize
     }
 }

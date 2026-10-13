@@ -43,6 +43,9 @@ pub enum Action {
     Restore,
     /// Target vanished or became unusable.
     Drop,
+    /// We tried to hide and the window refused (elevated target, exotic window).
+    /// The binding is dropped in response, so we stop retrying forever.
+    Refused,
 }
 
 #[derive(Clone, Debug)]
@@ -71,7 +74,11 @@ impl Target {
     }
 
     pub fn describe(&self) -> String {
-        let t = if self.title.is_empty() { "(无标题)".to_string() } else { truncate(&self.title, 28) };
+        let t = if self.title.is_empty() {
+            "(无标题)".to_string()
+        } else {
+            truncate(&self.title, 28)
+        };
         format!("{} — {}", self.process, t)
     }
 }
@@ -91,6 +98,11 @@ pub struct Watcher {
     pub cfg: Config,
     /// Cursor position the last time we evaluated.
     last_cursor: POINT,
+    /// Last tick on which the cursor was confirmed inside the guard zone. The
+    /// debounce countdown starts from here rather than from the tick that first
+    /// noticed the cursor had left, which would otherwise throw away up to one
+    /// whole poll interval of the configured delay.
+    last_inside_ms: Option<u64>,
     /// Set when we hid because the user asked explicitly (hotkey/tray) rather than the mouse leaving.
     manual: bool,
 }
@@ -103,6 +115,7 @@ impl Watcher {
             hidden: None,
             cfg,
             last_cursor: POINT::default(),
+            last_inside_ms: None,
             manual: false,
         }
     }
@@ -114,6 +127,7 @@ impl Watcher {
                 self.target = Some(t);
                 self.state = State::Armed;
                 self.manual = false;
+                self.last_inside_ms = None;
                 true
             }
             None => false,
@@ -125,6 +139,7 @@ impl Watcher {
         self.target = None;
         self.state = State::Idle;
         self.manual = false;
+        self.last_inside_ms = None;
     }
 
     /// Restore the window if we are holding it hidden.
@@ -147,7 +162,11 @@ impl Watcher {
         match hide(t.hwnd, self.cfg.mode, self.cfg.alpha) {
             Some(h) => {
                 self.hidden = Some(h);
-                self.state = if self.cfg.latch { State::Latched } else { State::Hidden };
+                self.state = if self.cfg.latch {
+                    State::Latched
+                } else {
+                    State::Hidden
+                };
                 self.manual = true;
                 true
             }
@@ -225,7 +244,15 @@ impl Watcher {
         }
 
         // Not hidden.
-        if self.cfg.skip_minimized && is_minimized(target.hwnd) {
+        //
+        // A minimized window is skipped unconditionally, whatever `skip_minimized`
+        // says. `hide()` cannot act on one (there is nothing on screen to hide), and
+        // because that also comes back as `None` it must never be mistaken for a
+        // window *refusing* to be hidden — that path suppresses the window and tells
+        // the user about admin rights, which would be both wrong and sticky. Stay
+        // `Armed` and keep the binding, so the moment the window is restored it gets
+        // protected as normal.
+        if is_minimized(target.hwnd) {
             self.state = State::Armed;
             return Action::None;
         }
@@ -238,10 +265,27 @@ impl Watcher {
         }
 
         let inside = self.cursor_inside(cursor, false);
+        if inside {
+            self.last_inside_ms = Some(now_ms);
+        }
         match self.state {
             State::Armed => {
                 if !inside {
-                    self.state = State::Pending { since: now_ms };
+                    // Start the countdown from the last tick the cursor really was
+                    // inside, not from this one. Using now_ms here would throw away
+                    // up to a whole poll interval before the configured delay even
+                    // begins, which is most of why hiding felt sluggish.
+                    //
+                    // Only trust a timestamp from within the last `delay_ms`: if the
+                    // cursor was last seen inside a long time ago the window sat in
+                    // Armed without ever hiding (minimized, or not focused, with
+                    // hide_only_when_focused), and counting from back then would hide
+                    // it the instant it became eligible.
+                    let since = match self.last_inside_ms {
+                        Some(t) if now_ms.saturating_sub(t) <= self.cfg.delay_ms => t,
+                        _ => now_ms,
+                    };
+                    self.state = State::Pending { since };
                 }
                 Action::None
             }
@@ -254,14 +298,21 @@ impl Watcher {
                     match hide(target.hwnd, self.cfg.mode, self.cfg.alpha) {
                         Some(h) => {
                             self.hidden = Some(h);
-                            self.state = if self.cfg.latch { State::Latched } else { State::Hidden };
+                            self.state = if self.cfg.latch {
+                                State::Latched
+                            } else {
+                                State::Hidden
+                            };
                             Action::Hide
                         }
                         None => {
-                            // Couldn't hide (elevated target, exotic window). Back off
-                            // so we don't spin on it.
-                            self.state = State::Armed;
-                            Action::Drop
+                            // The window refuses to be hidden (elevated target, an
+                            // exotic shell surface). Retrying every debounce would
+                            // spin forever and never work, so stop guarding it and
+                            // tell the user once.
+                            self.target = None;
+                            self.state = State::Idle;
+                            Action::Refused
                         }
                     }
                 } else {

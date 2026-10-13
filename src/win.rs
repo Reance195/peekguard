@@ -1,5 +1,10 @@
 //! Minimal hand-written Win32 FFI. Zero external crates.
+//!
+//! Type names keep their Win32 spelling (`HWND`, `NOTIFYICONDATAW`, …) on
+//! purpose: a hand-written binding is meant to be checked line-by-line against
+//! the SDK headers, and renaming anything only gets in the way of that.
 #![allow(non_snake_case, non_camel_case_types, dead_code)]
+#![allow(clippy::upper_case_acronyms)]
 
 use std::ffi::c_void;
 
@@ -10,6 +15,7 @@ pub type HICON = *mut c_void;
 pub type HCURSOR = *mut c_void;
 pub type HBRUSH = *mut c_void;
 pub type HANDLE = *mut c_void;
+pub type HKEY = *mut c_void;
 pub type WPARAM = usize;
 pub type LPARAM = isize;
 pub type LRESULT = isize;
@@ -54,6 +60,14 @@ pub const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 pub const TOKEN_QUERY: u32 = 0x0008;
 pub const TOKEN_ELEVATION: u32 = 20;
 pub const ERROR_ALREADY_EXISTS: u32 = 183;
+pub const ERROR_SUCCESS: u32 = 0;
+pub const ERROR_FILE_NOT_FOUND: u32 = 2;
+
+// ---- registry
+pub const HKEY_CURRENT_USER: HKEY = 0x8000_0001u32 as usize as HKEY;
+pub const KEY_QUERY_VALUE: u32 = 0x0001;
+pub const KEY_SET_VALUE: u32 = 0x0002;
+pub const REG_SZ: u32 = 1;
 
 // ---- messages
 pub const WM_DESTROY: u32 = 0x0002;
@@ -72,6 +86,8 @@ pub const MF_STRING: u32 = 0x0000;
 pub const MF_CHECKED: u32 = 0x0008;
 pub const MF_SEPARATOR: u32 = 0x0800;
 pub const MF_GRAYED: u32 = 0x0001;
+pub const MF_POPUP: u32 = 0x0010;
+pub const MF_RADIOCHECK: u32 = 0x0200;
 pub const TPM_RIGHTBUTTON: u32 = 0x0002;
 pub const TPM_RETURNCMD: u32 = 0x0100;
 
@@ -140,7 +156,14 @@ pub struct MSG {
 
 impl Default for MSG {
     fn default() -> Self {
-        MSG { hwnd: std::ptr::null_mut(), message: 0, wParam: 0, lParam: 0, time: 0, pt: POINT::default() }
+        MSG {
+            hwnd: std::ptr::null_mut(),
+            message: 0,
+            wParam: 0,
+            lParam: 0,
+            time: 0,
+            pt: POINT::default(),
+        }
     }
 }
 
@@ -220,8 +243,14 @@ unsafe extern "system" {
     pub fn GetWindowLongPtrW(h: HWND, idx: i32) -> isize;
     pub fn SetWindowLongPtrW(h: HWND, idx: i32, v: isize) -> isize;
     pub fn SetLayeredWindowAttributes(h: HWND, key: COLORREF, alpha: u8, flags: u32) -> BOOL;
-    pub fn GetLayeredWindowAttributes(h: HWND, key: *mut COLORREF, alpha: *mut u8, flags: *mut u32) -> BOOL;
-    pub fn SetWindowPos(h: HWND, after: HWND, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> BOOL;
+    pub fn GetLayeredWindowAttributes(
+        h: HWND,
+        key: *mut COLORREF,
+        alpha: *mut u8,
+        flags: *mut u32,
+    ) -> BOOL;
+    pub fn SetWindowPos(h: HWND, after: HWND, x: i32, y: i32, cx: i32, cy: i32, flags: u32)
+        -> BOOL;
     pub fn ShowWindow(h: HWND, cmd: i32) -> BOOL;
     pub fn RegisterHotKey(h: HWND, id: i32, mods: u32, vk: u32) -> BOOL;
     pub fn UnregisterHotKey(h: HWND, id: i32) -> BOOL;
@@ -252,14 +281,25 @@ unsafe extern "system" {
     pub fn CreatePopupMenu() -> HMENU;
     pub fn AppendMenuW(m: HMENU, flags: u32, id: usize, text: *const u16) -> BOOL;
     pub fn DestroyMenu(m: HMENU) -> BOOL;
-    pub fn TrackPopupMenu(m: HMENU, flags: u32, x: i32, y: i32, reserved: i32, h: HWND, r: *const RECT) -> BOOL;
+    pub fn TrackPopupMenu(
+        m: HMENU,
+        flags: u32,
+        x: i32,
+        y: i32,
+        reserved: i32,
+        h: HWND,
+        r: *const RECT,
+    ) -> BOOL;
     pub fn SetForegroundWindow(h: HWND) -> BOOL;
     pub fn LoadIconW(inst: HINSTANCE, name: *const u16) -> HICON;
     pub fn SetProcessDPIAware() -> BOOL;
     pub fn GetDC(h: HWND) -> *mut c_void;
     pub fn ReleaseDC(h: HWND, dc: *mut c_void) -> i32;
     pub fn MessageBoxW(h: HWND, text: *const u16, caption: *const u16, ty: u32) -> i32;
-    pub fn EnumWindows(cb: Option<unsafe extern "system" fn(HWND, LPARAM) -> BOOL>, lparam: LPARAM) -> BOOL;
+    pub fn EnumWindows(
+        cb: Option<unsafe extern "system" fn(HWND, LPARAM) -> BOOL>,
+        lparam: LPARAM,
+    ) -> BOOL;
 }
 
 #[link(name = "kernel32")]
@@ -268,7 +308,8 @@ unsafe extern "system" {
     pub fn GetLastError() -> u32;
     pub fn OpenProcess(access: u32, inherit: BOOL, pid: u32) -> HANDLE;
     pub fn CloseHandle(h: HANDLE) -> BOOL;
-    pub fn QueryFullProcessImageNameW(h: HANDLE, flags: u32, buf: *mut u16, size: *mut u32) -> BOOL;
+    pub fn QueryFullProcessImageNameW(h: HANDLE, flags: u32, buf: *mut u16, size: *mut u32)
+        -> BOOL;
     pub fn GetCurrentProcess() -> HANDLE;
     pub fn CreateMutexW(attr: *const c_void, owner: BOOL, name: *const u16) -> HANDLE;
     pub fn GetTickCount64() -> u64;
@@ -283,7 +324,33 @@ unsafe extern "system" {
 #[link(name = "advapi32")]
 unsafe extern "system" {
     pub fn OpenProcessToken(proc: HANDLE, access: u32, token: *mut HANDLE) -> BOOL;
-    pub fn GetTokenInformation(token: HANDLE, class: u32, info: *mut c_void, len: u32, ret: *mut u32) -> BOOL;
+    pub fn GetTokenInformation(
+        token: HANDLE,
+        class: u32,
+        info: *mut c_void,
+        len: u32,
+        ret: *mut u32,
+    ) -> BOOL;
+    pub fn RegOpenKeyExW(key: HKEY, sub: *const u16, opts: u32, access: u32, out: *mut HKEY)
+        -> u32;
+    pub fn RegQueryValueExW(
+        key: HKEY,
+        name: *const u16,
+        reserved: *mut u32,
+        ty: *mut u32,
+        data: *mut u8,
+        len: *mut u32,
+    ) -> u32;
+    pub fn RegSetValueExW(
+        key: HKEY,
+        name: *const u16,
+        reserved: u32,
+        ty: u32,
+        data: *const u8,
+        len: u32,
+    ) -> u32;
+    pub fn RegDeleteValueW(key: HKEY, name: *const u16) -> u32;
+    pub fn RegCloseKey(key: HKEY) -> u32;
 }
 
 // ================================================================ safe helpers
@@ -292,6 +359,16 @@ pub fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Read a window's caption.
+///
+/// Deliberately `GetWindowTextW`, **not** `SendMessageTimeoutW(WM_GETTEXT)`.
+/// `GetWindowText` is documented to return the cached caption instead of blocking
+/// on a cross-process `SendMessage`, and measurement backs that up: against a
+/// deliberately hung window it returned in 0.09 ms, while a 200 ms-timeout
+/// `WM_GETTEXTLENGTH` both burned the full timeout *and* reported failure — i.e.
+/// the "safer" API was ~2000x slower here and lost the title of exactly the
+/// windows it was supposed to protect against. See
+/// `docs/superpowers/specs/2026-10-10-peekguard-design.md` ("窗口标题读取").
 pub fn window_title(h: HWND) -> String {
     unsafe {
         let n = GetWindowTextLengthW(h);
@@ -360,7 +437,12 @@ pub fn virtual_screen() -> RECT {
         let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
         let w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
         let h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        RECT { left: x, top: y, right: x + w, bottom: y + h }
+        RECT {
+            left: x,
+            top: y,
+            right: x + w,
+            bottom: y + h,
+        }
     }
 }
 
@@ -431,4 +513,21 @@ pub fn error_already_exists() -> bool {
 
 pub fn tick_ms() -> u64 {
     unsafe { GetTickCount64() }
+}
+
+/// All visible top-level windows with a title, in z-order (front first).
+/// Used by rule matching; the guard itself only ever touches one window.
+pub fn top_level_windows() -> Vec<HWND> {
+    let mut out: Vec<HWND> = Vec::new();
+    unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let v = &mut *(lparam as *mut Vec<HWND>);
+        if is_visible(hwnd) && !window_title(hwnd).is_empty() {
+            v.push(hwnd);
+        }
+        1
+    }
+    unsafe {
+        EnumWindows(Some(cb), &mut out as *mut Vec<HWND> as LPARAM);
+    }
+    out
 }

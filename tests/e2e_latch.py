@@ -14,8 +14,9 @@ from ctypes import wintypes as W
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from e2e_live import (  # noqa: E402
-    EXE, TARGET_TITLE, alpha_of, find_target, is_hidden, rect, send_hotkey,
-    stop_peekguard, wait_until,
+    EXE, TARGET_TITLE, alpha_of, bind_target, find_target, focus_window,
+    is_hidden, rect,
+    scratch_mutex, spawn_target, stop_peekguard, wait_until,
 )
 
 u32 = C.windll.user32
@@ -36,6 +37,7 @@ def spawn(latch: bool):
             "",
         ]))
     env["PEEKGUARD_CONFIG"] = cfg_path
+    env["PEEKGUARD_MUTEX"] = scratch_mutex()
     return subprocess.Popen([EXE], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
 
@@ -73,8 +75,7 @@ def main():
         results.append((name, bool(cond)))
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f"  -- {detail}" if detail else ""))
 
-    target = subprocess.Popen([sys.executable, os.path.join(HERE, "target_window.py"), "180"])
-    hwnd = find_target(target.pid)
+    target, hwnd = spawn_target("180")
     if not hwnd:
         print("FAIL: no target window")
         target.terminate()
@@ -87,15 +88,14 @@ def main():
         print(f"\n-- latch = true, mode = {MODE} --")
         pg = spawn(True)
         time.sleep(1.5)
-        u32.SetForegroundWindow(hwnd)
+        focus_window(hwnd)
         time.sleep(0.4)
         u32.SetCursorPos(cx, cy)
         time.sleep(0.2)
-        send_hotkey()  # bind
-        time.sleep(1.0)
-
-        u32.SetCursorPos(2, 2)
-        check("latched hide happens", wait_until(lambda: is_hidden(hwnd), 5.0), f"alpha={alpha_of(hwnd)}")
+        # Confirmed bind: a dropped chord would otherwise surface as a misleading
+        # "latch is broken" failure instead of a missed keypress.
+        check("bind took effect", bind_target(hwnd), f"alpha={alpha_of(hwnd)}")
+        check("latched hide happens", is_hidden(hwnd), f"alpha={alpha_of(hwnd)}")
 
         # the whole point: cursor returns, window must STAY hidden
         u32.SetCursorPos(cx, cy)
@@ -130,15 +130,14 @@ def main():
         print(f"\n-- latch = false, manual hide, mode = {MODE} --")
         pg2 = spawn(False)
         time.sleep(1.5)
-        u32.SetForegroundWindow(hwnd)
+        focus_window(hwnd)
         time.sleep(0.4)
         # keep the cursor away so the mouse policy does not interfere
         u32.SetCursorPos(2, 2)
         time.sleep(0.2)
-        send_hotkey()  # bind
-        time.sleep(0.4)
+        check("bind took effect", bind_target(hwnd), f"alpha={alpha_of(hwnd)}")
         # cursor is outside, so it would auto-hide; confirm that first
-        check("auto-hides with cursor away", wait_until(lambda: is_hidden(hwnd), 5.0))
+        check("auto-hides with cursor away", is_hidden(hwnd))
         u32.SetCursorPos(cx, cy)
         check("mouse restores it", wait_until(lambda: not is_hidden(hwnd), 5.0))
 

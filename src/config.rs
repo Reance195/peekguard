@@ -82,9 +82,10 @@ impl Rule {
         }
         if let Some(t) = &self.title {
             let hay = title.to_lowercase();
-            let hit = t.split(',').map(|s| s.trim().to_lowercase()).any(|needle| {
-                !needle.is_empty() && hay.contains(&needle)
-            });
+            let hit = t
+                .split(',')
+                .map(|s| s.trim().to_lowercase())
+                .any(|needle| !needle.is_empty() && hay.contains(&needle));
             if !hit {
                 return false;
             }
@@ -149,15 +150,21 @@ pub struct Config {
     pub rules: Vec<Rule>,
     /// hide the window only while it is the foreground window? (default: no)
     pub hide_only_when_focused: bool,
-    /// do not hide windows that are already minimized
+    /// Accepted for backwards compatibility, but no longer has any effect: a
+    /// minimized window is always skipped, because `hide()` cannot act on one and
+    /// its `None` return must not be read as the window refusing.
+    ///
+    /// Kept (rather than deleted) so that existing configs do not suddenly report
+    /// `未知配置项` after an upgrade. `to_text` only writes it back when it is set
+    /// to a non-default value.
     pub skip_minimized: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            delay_ms: 350,
-            margin_px: 6,
+            delay_ms: 60,
+            margin_px: 10,
             mode: HideMode::Alpha,
             alpha: 0,
             latch: false,
@@ -259,8 +266,19 @@ impl Config {
                     Err(_) => warnings.push(format!("alpha 不是数字: {value}")),
                 },
                 "latch" => cfg.latch = parse_bool(value),
-                "hide_only_when_focused" | "only_focused" => cfg.hide_only_when_focused = parse_bool(value),
-                "skip_minimized" => cfg.skip_minimized = parse_bool(value),
+                "hide_only_when_focused" | "only_focused" => {
+                    cfg.hide_only_when_focused = parse_bool(value)
+                }
+                "skip_minimized" => {
+                    // Inert: minimized windows are always skipped now. Parsed so old
+                    // config files keep loading, and surfaced once as a note.
+                    cfg.skip_minimized = parse_bool(value);
+                    if !cfg.skip_minimized {
+                        warnings.push(
+                            "skip_minimized 已废弃：最小化窗口一律跳过，此项不再生效".to_string(),
+                        );
+                    }
+                }
                 "autobind" => {
                     if value.is_empty() {
                         cfg.autobind = None;
@@ -298,26 +316,47 @@ impl Config {
         let _ = writeln!(s, "delay_ms = {}", self.delay_ms);
         let _ = writeln!(s, "# 判定“鼠标在窗口内”时四周额外给的像素余量");
         let _ = writeln!(s, "margin_px = {}", self.margin_px);
-        let _ = writeln!(s, "# 隐身方式: alpha(透明) | move(移出屏幕) | hide(隐藏窗口)");
+        let _ = writeln!(
+            s,
+            "# 隐身方式: alpha(透明) | move(移出屏幕) | hide(隐藏窗口)"
+        );
         let _ = writeln!(s, "mode = {}", self.mode.as_str());
         let _ = writeln!(s, "# alpha 模式下的透明度，0 为完全不可见");
         let _ = writeln!(s, "alpha = {}", self.alpha);
-        let _ = writeln!(s, "# true = 隐身之后必须用热键/托盘才能恢复（防领导突然回头）");
+        let _ = writeln!(
+            s,
+            "# true = 隐身之后必须用热键/托盘才能恢复（防领导突然回头）"
+        );
         let _ = writeln!(s, "latch = {}", self.latch);
         let _ = writeln!(s, "# true = 只在目标窗口是前台窗口时才响应鼠标");
-        let _ = writeln!(s, "hide_only_when_focused = {}", self.hide_only_when_focused);
-        let _ = writeln!(s, "# 已经最小化的窗口不处理");
-        let _ = writeln!(s, "skip_minimized = {}", self.skip_minimized);
+        let _ = writeln!(
+            s,
+            "hide_only_when_focused = {}",
+            self.hide_only_when_focused
+        );
+        if self.skip_minimized != Config::default().skip_minimized {
+            let _ = writeln!(
+                s,
+                "# 已废弃：最小化窗口一律跳过（此项仅保留兼容，无实际作用）"
+            );
+            let _ = writeln!(s, "skip_minimized = {}", self.skip_minimized);
+        }
         let _ = writeln!(s);
         let _ = writeln!(s, "# 启动时自动绑定的窗口（可留空）");
         let _ = writeln!(
             s,
             "autobind = {}",
-            self.autobind.as_ref().map(|r| r.describe_rule()).unwrap_or_default()
+            self.autobind
+                .as_ref()
+                .map(|r| r.describe_rule())
+                .unwrap_or_default()
         );
         let _ = writeln!(s);
         let _ = writeln!(s, "# 常驻规则：窗口出现时自动纳入保护");
-        let _ = writeln!(s, "# 格式: rule = process:QQ.exe | title:聊天     字段用 | 分隔；title 内用 , 表示“或”");
+        let _ = writeln!(
+            s,
+            "# 格式: rule = process:QQ.exe | title:聊天     字段用 | 分隔；title 内用 , 表示“或”"
+        );
         for r in &self.rules {
             let _ = writeln!(s, "rule = {}", r.describe_rule());
         }
@@ -357,7 +396,10 @@ impl Rule {
 }
 
 fn parse_bool(v: &str) -> bool {
-    matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on" | "y")
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on" | "y"
+    )
 }
 
 #[cfg(test)]
@@ -396,10 +438,13 @@ mod tests {
 
     #[test]
     fn config_roundtrip() {
-        let mut cfg = Config::default();
-        cfg.delay_ms = 500;
-        cfg.mode = HideMode::Move;
-        cfg.add_rule(Rule::parse("process:QQ.exe | title:聊天").unwrap());        let text = cfg.to_text();
+        let mut cfg = Config {
+            delay_ms: 500,
+            mode: HideMode::Move,
+            ..Default::default()
+        };
+        cfg.add_rule(Rule::parse("process:QQ.exe | title:聊天").unwrap());
+        let text = cfg.to_text();
         let (back, warns) = Config::parse(&text);
         assert!(warns.is_empty(), "{warns:?}");
         assert_eq!(back.delay_ms, 500);

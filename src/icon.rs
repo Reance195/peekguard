@@ -2,6 +2,13 @@
 //!
 //! Draws a small "eye" glyph into a 32bpp DIB with alpha and hands back an HICON.
 //! Falls back to the stock application icon if anything fails.
+//!
+//! The struct fields keep their Win32 names (`biWidth`, `fIcon`, …) on purpose:
+//! they mirror the C layout field-for-field, which is the whole point of a
+//! hand-written FFI binding. Renaming them to snake_case would make the mapping
+//! harder to check against the SDK headers. Same for the type names.
+#![allow(non_snake_case)]
+#![allow(clippy::upper_case_acronyms)]
 
 use crate::win::*;
 use std::ffi::c_void;
@@ -180,7 +187,14 @@ pub fn create_icon(size: usize) -> Option<HICON> {
         };
 
         let mut bits: *mut c_void = std::ptr::null_mut();
-        let color = CreateDIBSection(std::ptr::null_mut(), &bmi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        let color = CreateDIBSection(
+            std::ptr::null_mut(),
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
         if color.is_null() || bits.is_null() {
             return None;
         }
@@ -198,7 +212,13 @@ pub fn create_icon(size: usize) -> Option<HICON> {
                 }
             }
         }
-        let hbm_mask = CreateBitmap(size as i32, size as i32, 1, 1, mask.as_ptr() as *const c_void);
+        let hbm_mask = CreateBitmap(
+            size as i32,
+            size as i32,
+            1,
+            1,
+            mask.as_ptr() as *const c_void,
+        );
         if hbm_mask.is_null() {
             DeleteObject(color);
             return None;
@@ -240,7 +260,10 @@ mod tests {
         let opaque = px.chunks(4).filter(|p| p[3] > 200).count();
         assert!(opaque > 10, "icon should have opaque pixels, got {opaque}");
         let transparent = px.chunks(4).filter(|p| p[3] < 10).count();
-        assert!(transparent > 10, "corners should be transparent, got {transparent}");
+        assert!(
+            transparent > 10,
+            "corners should be transparent, got {transparent}"
+        );
     }
 
     #[test]

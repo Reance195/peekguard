@@ -21,8 +21,6 @@ pub struct Snapshot {
     pub was_layered: bool,
     pub ex_style: isize,
     pub was_minimized: bool,
-    /// Recorded for diagnostics; a window we hid should have been visible.
-    pub was_visible: bool,
 }
 
 impl Snapshot {
@@ -37,7 +35,6 @@ impl Snapshot {
             was_layered: ex_style(hwnd) & WS_EX_LAYERED != 0,
             ex_style: ex_style(hwnd),
             was_minimized: is_minimized(hwnd),
-            was_visible: is_visible(hwnd),
         })
     }
 }
@@ -69,7 +66,15 @@ impl Hidden {
             HideMode::Move => {
                 let r = self.snap.rect;
                 unsafe {
-                    SetWindowPos(h, std::ptr::null_mut(), r.left, r.top, r.width(), r.height(), SWP_NOZORDER | SWP_NOACTIVATE);
+                    SetWindowPos(
+                        h,
+                        std::ptr::null_mut(),
+                        r.left,
+                        r.top,
+                        r.width(),
+                        r.height(),
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
                 }
             }
             HideMode::Hide => {
@@ -87,19 +92,55 @@ impl Hidden {
     }
 }
 
+/// Test-only: `PEEKGUARD_REFUSE_HIDE=1` makes every hide attempt fail the way an
+/// elevated target does, so the refusal path can be exercised deterministically.
+/// A real elevated process cannot be created from a test without a UAC prompt.
+fn refuse_hide_hook() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("PEEKGUARD_REFUSE_HIDE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    })
+}
+
 pub fn hide(hwnd: HWND, mode: HideMode, alpha: u8) -> Option<Hidden> {
     let snap = Snapshot::capture(hwnd)?;
     if snap.was_minimized {
         return None;
     }
+    // Journal the intent *before* the window is touched, not after.
+    //
+    // The whole point of the journal is that a crash can never leave an invisible
+    // window with no record of it. Writing it afterwards leaves exactly that gap: the
+    // window is already invisible while the record is still only in memory, so dying
+    // in between strands it — the one outcome this file exists to prevent. This was
+    // not theoretical; a hard kill landing in that window is how it was caught.
+    //
+    // Writing first makes the two failure modes asymmetric, which is the point: a
+    // crash in between leaves a journal entry for a window that is still visible, and
+    // "restoring" that is a harmless no-op, whereas the reverse is unrecoverable.
+    // A hide that fails outright is also covered — the caller rewrites the
+    // authoritative set afterwards, so the entry is cleaned up again.
+    let hidden = Hidden { snap, mode };
+    crate::session::write(std::slice::from_ref(&hidden));
+    // Deliberately after the journal write, so the hook behaves like the real failure
+    // it stands in for. A genuinely elevated target fails *inside* the hide call
+    // (SetWindowLongPtrW refuses), i.e. after the entry has been written; short-
+    // circuiting earlier would leave the cleanup path untested.
+    if refuse_hide_hook() {
+        crate::session::write(&[]);
+        return None;
+    }
     let ok = match mode {
-        HideMode::Alpha => hide_alpha(hwnd, &snap, alpha),
-        HideMode::Move => hide_move(hwnd, &snap),
+        HideMode::Alpha => hide_alpha(hwnd, &hidden.snap, alpha),
+        HideMode::Move => hide_move(hwnd, &hidden.snap),
         HideMode::Hide => hide_showwindow(hwnd),
     };
     if ok {
-        Some(Hidden { snap, mode })
+        Some(hidden)
     } else {
+        crate::session::write(&[]);
         None
     }
 }
@@ -138,25 +179,6 @@ fn hide_move(hwnd: HWND, snap: &Snapshot) -> bool {
 
 fn hide_showwindow(hwnd: HWND) -> bool {
     unsafe { ShowWindow(hwnd, SW_HIDE) != 0 }
-}
-
-/// Is this window currently invisible because of us or anything else?
-/// Used by the debug log and by crash-recovery verification.
-pub fn looks_hidden(hwnd: HWND) -> bool {
-    if !is_valid(hwnd) {
-        return false;
-    }
-    if !is_visible(hwnd) {
-        return true;
-    }
-    if let Some(a) = layered_alpha(hwnd) {
-        if a == 0 {
-            return true;
-        }
-    }
-    let r = window_rect(hwnd);
-    let vs = virtual_screen();
-    !r.intersects(&vs)
 }
 
 /// Whether the process owning a window runs elevated.
