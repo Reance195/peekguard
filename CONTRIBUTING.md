@@ -7,7 +7,7 @@ pass the tests, and still restore the user's windows when something goes wrong.*
 ## Ground rules
 
 1. **Keep it dependency-free.** The whole appeal of the project is that it is a single
-   ~260 KB exe with nothing from crates.io. A new dependency needs a very good reason.
+   ~275 KB exe with nothing from crates.io. A new dependency needs a very good reason.
 2. **Stay out of the target process.** No injection, no `SetWindowsHookEx`, no
    subclassing. Polling `GetCursorPos` and testing geometry is the entire mechanism.
 3. **Never strand a window.** If you touch the hide path, you touch the restore path.

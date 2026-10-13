@@ -21,7 +21,7 @@ cursor inside the window      350 ms after it left         cursor returns
 
 - **Zero dependencies** — standard library and hand-written Win32 FFI only. Nothing
   from crates.io.
-- **One file** — a ~260 KB exe. No installer. Lives in the tray.
+- **One file** — a ~275 KB exe. No installer. Lives in the tray.
 - **Zero intrusion** — no injection, no subclassing, no global hooks. The target
   process is never touched.
 - **Never leaves a mess** — a crash, a task-manager kill, or an abnormal exit all get
@@ -229,7 +229,7 @@ are combined with **AND**.
 ## Development
 
 ```sh
-cargo build --release      # -> target/release/peekguard.exe (~260 KB, zero deps)
+cargo build --release      # -> target/release/peekguard.exe (~275 KB, zero deps)
 cargo test                 # 17 unit tests (no side effects, plus 1 #[ignore] diagnostic)
 
 # end-to-end (moves the real cursor, needs an interactive desktop)

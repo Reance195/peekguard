@@ -18,7 +18,7 @@
 ```
 
 - **零依赖**：只用标准库 + 手写 Win32 FFI，没有 crates.io 依赖
-- **单文件 exe**：约 260 KB，免安装，运行在托盘
+- **单文件 exe**：约 275 KB，免安装，运行在托盘
 - **零侵入**：不注入、不子类化、不装全局钩子，对目标进程完全不碰
 - **绝不留残局**：崩溃、强杀、异常退出都会在下次启动时还原窗口
 - **常驻规则**：写一行 `rule =`，程序自己认出该保护哪些窗口
@@ -197,7 +197,7 @@ rule = process:msedge.exe | title:小说,股票
 ## 开发
 
 ```sh
-cargo build --release      # -> target/release/peekguard.exe (~260 KB，零依赖)
+cargo build --release      # -> target/release/peekguard.exe (~275 KB，零依赖)
 cargo test                 # 17 个单元测试（零副作用，另有 1 个 #[ignore] 诊断用例）
 
 # 端到端（会移动真实鼠标，需要交互式桌面）
