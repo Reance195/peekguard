@@ -5,6 +5,10 @@ English | [简体中文](README.zh-CN.md)
 [![CI](https://github.com/Reance195/peekguard/actions/workflows/ci.yml/badge.svg)](https://github.com/Reance195/peekguard/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src="docs/social-preview.png" alt="PeekGuard — bind any window, hide when the mouse leaves, restore when it comes back" width="100%">
+</p>
+
 Bind any window. The mouse leaves — it disappears. The mouse comes back — it returns.
 
 This is the behaviour of QQ's "privacy peek window" in China, applied to *any* window

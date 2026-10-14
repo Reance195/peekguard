@@ -5,6 +5,10 @@
 [![CI](https://github.com/Reance195/peekguard/actions/workflows/ci.yml/badge.svg)](https://github.com/Reance195/peekguard/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src="docs/social-preview.png" alt="PeekGuard —— 绑定任意窗口，鼠标移开自动隐身，鼠标移回自动恢复" width="100%">
+</p>
+
 绑定任意窗口，鼠标移开自动隐身，鼠标移回自动恢复。
 
 这就是 QQ「防窥小窗」的那个行为，但作用于**任何**窗口，不只是 QQ。
