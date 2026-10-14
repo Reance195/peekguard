@@ -66,31 +66,51 @@ pub struct Rule {
 }
 
 impl Rule {
+    /// True when this rule constrains at least one field. A rule that constrains
+    /// nothing would otherwise match every window, so it is treated as a non-rule.
+    pub fn is_constrained(&self) -> bool {
+        self.process.is_some() || self.class.is_some() || self.title.is_some()
+    }
+
+    /// Does `process` (a bare exe name, case-insensitive) satisfy this rule?
+    /// A rule with no `process` field accepts any.
+    pub fn matches_process(&self, process: &str) -> bool {
+        match &self.process {
+            Some(p) => process.eq_ignore_ascii_case(p),
+            None => true,
+        }
+    }
+
+    /// Does `class` satisfy this rule? A rule with no `class` field accepts any.
+    pub fn matches_class(&self, class: &str) -> bool {
+        match &self.class {
+            Some(c) => class.eq_ignore_ascii_case(c),
+            None => true,
+        }
+    }
+
+    /// Does `title` satisfy this rule? A rule with no `title` field accepts any;
+    /// otherwise the comma-separated substrings are OR'd, case-insensitively.
+    pub fn matches_title(&self, title: &str) -> bool {
+        match &self.title {
+            Some(t) => {
+                let hay = title.to_lowercase();
+                t.split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .any(|needle| !needle.is_empty() && hay.contains(&needle))
+            }
+            None => true,
+        }
+    }
+
+    /// All specified fields must match (AND). Kept as the one-shot form for callers
+    /// that already hold all three strings; `rules` evaluates the parts lazily so a
+    /// window rejected on its process name never pays for its class or title.
     pub fn matches(&self, process: &str, class: &str, title: &str) -> bool {
-        if self.process.is_none() && self.class.is_none() && self.title.is_none() {
-            return false;
-        }
-        if let Some(p) = &self.process {
-            if !process.eq_ignore_ascii_case(p) {
-                return false;
-            }
-        }
-        if let Some(c) = &self.class {
-            if !class.eq_ignore_ascii_case(c) {
-                return false;
-            }
-        }
-        if let Some(t) = &self.title {
-            let hay = title.to_lowercase();
-            let hit = t
-                .split(',')
-                .map(|s| s.trim().to_lowercase())
-                .any(|needle| !needle.is_empty() && hay.contains(&needle));
-            if !hit {
-                return false;
-            }
-        }
-        true
+        self.is_constrained()
+            && self.matches_process(process)
+            && self.matches_class(class)
+            && self.matches_title(title)
     }
 
     pub fn describe(&self) -> String {
@@ -426,6 +446,70 @@ mod tests {
     fn title_or_is_case_insensitive() {
         let r = Rule::parse("title:GitHub,gitlab").unwrap();
         assert!(r.matches("any.exe", "", "github · where software is built"));
+    }
+
+    #[test]
+    fn field_predicates_agree_with_matches() {
+        // The scanner evaluates process/class/title one at a time so a window
+        // rejected on a cheap field never pays for a dearer one. That is only
+        // sound if the per-field predicates reproduce `matches` exactly, so pin
+        // them together on every combination of absent/present/match/miss.
+        let cases = [
+            ("process:QQ.exe", "qq.exe", "", "chat", true),
+            ("process:QQ.exe", "msedge.exe", "", "chat", false),
+            (
+                "class:Chrome_WidgetWin_1",
+                "x.exe",
+                "chrome_widgetwin_1",
+                "",
+                true,
+            ),
+            ("class:Chrome_WidgetWin_1", "x.exe", "other", "", false),
+            ("title:小说,股票", "x.exe", "", "行情-股票", true),
+            ("title:小说,股票", "x.exe", "", "github", false),
+            (
+                "process:msedge.exe | class:abc | title:news",
+                "msedge.exe",
+                "abc",
+                "daily news",
+                true,
+            ),
+            (
+                "process:msedge.exe | class:abc | title:news",
+                "msedge.exe",
+                "xyz",
+                "daily news",
+                false,
+            ),
+            (
+                "process:msedge.exe | class:abc | title:news",
+                "edge.exe",
+                "abc",
+                "daily news",
+                false,
+            ),
+        ];
+        for (spec, proc, class, title, want) in cases {
+            let r = Rule::parse(spec).unwrap();
+            let all = r.matches(proc, class, title);
+            let parts = r.matches_process(proc) && r.matches_class(class) && r.matches_title(title);
+            assert_eq!(all, want, "{spec}: matches");
+            assert_eq!(parts, want, "{spec}: per-field predicates");
+            assert_eq!(all, parts, "{spec}: the two forms must agree");
+        }
+    }
+
+    #[test]
+    fn unconstrained_rule_matches_nothing() {
+        let r = Rule::default();
+        assert!(!r.is_constrained());
+        assert!(!r.matches("any.exe", "cls", "title"));
+        // And the per-field predicates accept everything in isolation, which is
+        // why `is_constrained` — not the predicates — is what keeps a blank rule
+        // from swallowing every window.
+        assert!(r.matches_process("any.exe"));
+        assert!(r.matches_class("cls"));
+        assert!(r.matches_title("title"));
     }
 
     #[test]

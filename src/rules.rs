@@ -115,7 +115,8 @@ impl Scanner {
         let own_pid = std::process::id();
         let mut best: Option<HWND> = None;
         for hwnd in top_level_windows() {
-            if self.suppressed.contains(&hwnd) || process_id(hwnd) == own_pid {
+            let pid = process_id(hwnd);
+            if self.suppressed.contains(&hwnd) || pid == own_pid {
                 continue;
             }
             // Hidden covers both "minimized" and "not visible at all", and either
@@ -124,10 +125,39 @@ impl Scanner {
             if !is_visible(hwnd) || is_minimized(hwnd) {
                 continue;
             }
-            let proc = process_name(process_id(hwnd));
-            let cls = class_name(hwnd);
-            let title = window_title(hwnd);
-            if !cfg.rules.iter().any(|r| r.matches(&proc, &cls, &title)) {
+            // Each field is fetched at most once per window, and only if a rule
+            // actually constrains it. The process lookup (`OpenProcess` +
+            // `QueryFullProcessImageNameW`) dominates a scan, and the title is a
+            // cross-process read, so neither should be paid for a window a rule
+            // has already rejected on a cheaper field.
+            let mut proc: Option<String> = None;
+            let mut cls: Option<String> = None;
+            let mut title: Option<String> = None;
+            let matched = cfg.rules.iter().any(|r| {
+                if !r.is_constrained() {
+                    return false;
+                }
+                if r.process.is_some() {
+                    let p = proc.get_or_insert_with(|| process_name(pid));
+                    if !r.matches_process(p) {
+                        return false;
+                    }
+                }
+                if r.class.is_some() {
+                    let c = cls.get_or_insert_with(|| class_name(hwnd));
+                    if !r.matches_class(c) {
+                        return false;
+                    }
+                }
+                if r.title.is_some() {
+                    let t = title.get_or_insert_with(|| window_title(hwnd));
+                    if !r.matches_title(t) {
+                        return false;
+                    }
+                }
+                true
+            });
+            if !matched {
                 continue;
             }
             if hwnd == fg {
@@ -218,22 +248,23 @@ mod tests {
     }
 
     /// Perf guard rather than a micro-benchmark. The point is to catch a gross
-    /// regression — a blocking call entering the per-window loop, or
-    /// `window_title` moved in front of the cheap process-name filter — not to
+    /// regression — a blocking call entering the per-window loop, or a field
+    /// fetched before the cheaper one that would reject the window — not to
     /// measure the machine.
     ///
     /// The budget therefore scales with the desktop, because the scan's cost
-    /// does: one `OpenProcess` plus one `SendMessageTimeout` per top-level
-    /// window is the floor, so a flat millisecond cap only passes on a quiet
-    /// machine with few windows (it used to read 25 ms and failed at 27 ms
-    /// with 23 windows open). The reported time is the fastest pass, not the
-    /// average, so a single pass that lands on CPU contention cannot fail an
-    /// otherwise healthy run.
+    /// does: one `OpenProcess` plus one process-name query per top-level window
+    /// is the floor, so a flat millisecond cap only passes on a quiet machine
+    /// with few windows (it used to read 25 ms and failed at 27 ms with 23
+    /// windows open). The reported time is the fastest pass, not the average, so
+    /// a single pass that lands on CPU contention cannot fail an otherwise
+    /// healthy run.
     #[test]
     fn scan_costs_far_less_than_its_interval() {
         let mut cfg = Config::default();
-        // Matches nothing, so this measures the worst case: every window is
-        // examined and rejected.
+        // A process-only rule that matches nothing: every window is examined and
+        // rejected, and rejection happens on the process name — the expensive
+        // `OpenProcess` path — so this is the worst case, not a shortcut.
         cfg.add_rule(crate::config::Rule::parse("process:definitely-not-running-xyz.exe").unwrap());
         let mut s = Scanner::new();
         // Warm up: the first scan pays lazy API-set resolution and can be several
