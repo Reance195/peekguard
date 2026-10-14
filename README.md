@@ -275,13 +275,24 @@ can be checked line-by-line against the SDK headers.
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
+**The released `peekguard.exe` is not code-signed.** This project applied to the
+SignPath Foundation free signing program and was not accepted, and a commercial
+certificate is out of reach for a hobby project. Rather than leave that unstated, here
+is what it means on your machine and what you can check instead.
 
-Every released `peekguard.exe` is built by GitHub Actions from this repository, and
-each release is approved manually before it is signed. A signature therefore means
-"this binary is an automated build of the source in this repository" — not "a human
-audited this code".
+What is verifiable without a signature:
+
+- every release is built by GitHub Actions from this repository; the workflow is public
+  at `.github/workflows/ci.yml`
+- each release publishes a SHA-256 checksum of the exe (`SHA256SUMS.txt`)
+- with zero third-party dependencies, building it yourself is a few hundred lines of Rust
+  and nothing from crates.io, so `diff` is a complete audit
+
+| Symptom | Why |
+|---|---|
+| SmartScreen shows "Windows protected your PC" | reputation is built from install counts, and since March 2024 a signature alone does not grant it either |
+| UAC names an "unknown publisher" | the exe carries no signature |
+| Smart App Control refuses to launch it | SAC blocks unsigned executables unless its policy is changed |
 
 ### Team roles
 
@@ -289,9 +300,8 @@ audited this code".
 |---|---|---|
 | Authors | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | may change source and CI without further review |
 | Reviewers | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | review every pull request |
-| Approvers | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | approve every signing request |
 
-This is a single-maintainer project, so all three roles currently resolve to the same
+This is a single-maintainer project, so both roles currently resolve to the same
 person. The first additional contributor to be merged is expected to take over Reviewer.
 
 ### Privacy

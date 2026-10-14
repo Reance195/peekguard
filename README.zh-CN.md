@@ -240,13 +240,21 @@ SDK 头文件逐行对得上，改名反而更难核对。
 
 ## 代码签名策略（Code signing policy）
 
-[SignPath.io](https://about.signpath.io) 提供免费签名服务，证书由
-[SignPath Foundation](https://signpath.org) 签发。
+**已发布的 `peekguard.exe` 没有代码签名。** 本项目曾申请 SignPath Foundation 的免费签名服务，未获通过；商业签名证书的成本也不是一个业余项目能承担的。与其把这件事含糊过去，不如把实际影响和你可自行核实的办法写清楚。
 
-> Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+不依赖签名也能验证的部分：
 
-每个发布的 `peekguard.exe` 都由本仓库的 GitHub Actions 构建，每次发布需人工审批后才签名。
-因此签名所代表的含义是「该二进制文件是本仓库源码的自动化构建产物」，而不是「有人人工审计过这份代码」。
+- 每个发布版本都由 GitHub Actions 从本仓库源码构建，构建流程公开在
+  `.github/workflows/ci.yml`
+- 每个发布版本都附带 exe 的 SHA-256 校验值（`SHA256SUMS.txt`）
+- 项目零第三方依赖，自行构建只是几百行 Rust、不引入 crates.io 上的任何东西，
+  `diff` 就是一次完整审计
+
+| 现象 | 原因 |
+|---|---|
+| SmartScreen 提示"Windows 已保护你的电脑" | 信誉靠安装量积累，且自 2024 年 3 月起签名本身并不能直接换取信誉 |
+| UAC 显示"未知发布者" | exe 没有携带签名 |
+| Smart App Control 拒绝启动 | SAC 默认阻止未签名的可执行文件，除非修改其策略 |
 
 ### 团队角色
 
@@ -254,9 +262,8 @@ SDK 头文件逐行对得上，改名反而更难核对。
 |---|---|---|
 | Authors | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | 可直接修改源码与 CI，无需额外评审 |
 | Reviewers | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | 评审每一个 Pull Request |
-| Approvers | [`Owners`](https://github.com/Reance195/peekguard/people?query=role%3Aowner) | 审批每一次签名请求 |
 
-这是单人维护项目，三种角色目前都指向同一个人。第一个被合并进来的外部贡献者将接管 Reviewer。
+这是单人维护项目，两种角色目前都指向同一个人。第一个被合并进来的外部贡献者将接管 Reviewer。
 
 ### 隐私
 

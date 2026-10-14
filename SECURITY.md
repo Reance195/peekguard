@@ -51,9 +51,10 @@ There is no security mailing list. The advisory form is the only monitored chann
 - **Network exposure.** The program never opens a socket, never loads a URL, and never
   spawns a child process. If you find network traffic coming from `peekguard.exe`, it
   did not come from this source tree.
-- **Missing code signing.** The released exe is unsigned by design (see the code
-  signing policy in the README); the consequences of that — SmartScreen warnings and
-  Smart App Control rejecting the file — are known and documented, not vulnerabilities.
+- **Missing code signing.** The released exe is unsigned, and signing is not currently
+  in place (see the code signing policy in the README); the consequences of that —
+  SmartScreen warnings and Smart App Control rejecting the file — are known and
+  documented, not vulnerabilities.
 - **Denial of service against yourself.** Killing the process, corrupting your own
   config, or deleting the journal while it runs is not a security boundary.
 
