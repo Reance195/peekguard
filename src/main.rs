@@ -13,6 +13,7 @@ mod picker;
 mod rules;
 mod session;
 mod tray;
+mod update;
 mod watch;
 mod win;
 
@@ -28,6 +29,10 @@ const HOTKEY_BIND: i32 = 1;
 const HOTKEY_TOGGLE: i32 = 2;
 const HOTKEY_LATCH: i32 = 3;
 
+/// Posted by the background update-check thread. `wParam` = manual (non-zero when
+/// the user asked), `lParam` = a `Box<update::CheckResult>` as a raw pointer.
+const WM_UPDATE_RESULT: u32 = WM_APP + 2;
+
 /// Global app state, owned by the message loop and reached from the window proc.
 struct App {
     watcher: Watcher,
@@ -37,6 +42,10 @@ struct App {
     hwnd: HWND,
     /// Crosshair window picker, while the user is choosing a window to bind.
     picker: Option<picker::Picker>,
+    /// A newer release the last check found, if any.
+    update_available: Option<update::UpdateInfo>,
+    /// A background update check is in flight; don't start a second one.
+    update_checking: bool,
 }
 
 static mut APP: *mut App = std::ptr::null_mut();
@@ -124,6 +133,8 @@ fn main() {
         tray: None,
         hwnd: std::ptr::null_mut(),
         picker: None,
+        update_available: None,
+        update_checking: false,
     };
     unsafe {
         APP = &mut state;
@@ -171,6 +182,14 @@ fn main() {
             }
         }
         notify(&msg);
+    }
+
+    // Look for a newer release once at startup (opt-out via `check_update`). It
+    // runs on a background thread and reports back through the message loop, so
+    // a slow or absent network never delays the tray coming up. Skipped under
+    // PEEKGUARD_MUTEX so the end-to-end suites stay offline and deterministic.
+    if app().watcher.cfg.check_update && std::env::var("PEEKGUARD_MUTEX").is_err() {
+        start_update_check(false);
     }
 
     message_loop();
@@ -348,7 +367,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
                 toggle_bind();
             } else if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
                 on_menu(show_menu(hwnd, &menu_state()));
+            } else if event == NIN_BALLOONUSERCLICK {
+                // Clicking the "new version" balloon opens the download page.
+                if app().update_available.is_some() {
+                    open_update_page();
+                }
             }
+            0
+        }
+        m if m == WM_UPDATE_RESULT => {
+            // Reclaim the box the worker thread posted, then act on it.
+            let result = unsafe { *Box::from_raw(l as *mut update::CheckResult) };
+            on_update_result(w != 0, result);
             0
         }
         WM_CLOSE => {
@@ -601,6 +631,8 @@ fn menu_state() -> MenuState {
         rules: a.watcher.cfg.rules.len(),
         scan_enabled: !a.scanner.muted(),
         autostart: autostart::enabled(),
+        check_update: a.watcher.cfg.check_update,
+        update_available: a.update_available.as_ref().map(|i| i.version.clone()),
     }
 }
 
@@ -618,6 +650,9 @@ fn on_menu(cmd: usize) {
         CMD_SAVE_RULE => save_rule(),
         CMD_UNBIND_ALL => unbind_all(),
         CMD_AUTOSTART => toggle_autostart(),
+        CMD_CHECK_UPDATE => start_update_check(true),
+        CMD_UPDATE_TOGGLE => toggle_update_check(),
+        CMD_OPEN_UPDATE => open_update_page(),
         CMD_RELOAD => reload_config(),
         CMD_OPEN_CONFIG => open_config(),
         CMD_ABOUT => about(),
@@ -759,6 +794,116 @@ fn open_config() {
 fn about() {
     let a = app();
     about::show(a.hwnd);
+}
+
+// ---------------------------------------------------------------- update check
+
+/// Kick off a background check. `manual` runs show a "checking…" balloon and
+/// report "up to date" / failure; the startup run stays quiet unless a new
+/// release turns up. One check runs at a time.
+fn start_update_check(manual: bool) {
+    let a = app();
+    if a.update_checking {
+        if manual {
+            notify("正在检查更新…");
+        }
+        return;
+    }
+    a.update_checking = true;
+    if manual {
+        notify("正在检查更新…");
+    }
+    let hwnd = a.hwnd as usize;
+    // The worker only knows the window handle; it never touches APP, so the
+    // single-threaded main loop stays the sole owner of application state.
+    std::thread::spawn(move || {
+        let result = update::check();
+        let ptr = Box::into_raw(Box::new(result));
+        unsafe {
+            if PostMessageW(
+                hwnd as HWND,
+                WM_UPDATE_RESULT,
+                manual as usize,
+                ptr as isize,
+            ) == 0
+            {
+                // No loop to hand the box to; take it back so it is not leaked.
+                drop(Box::from_raw(ptr));
+            }
+        }
+    });
+}
+
+/// Land a finished check on the UI thread.
+fn on_update_result(manual: bool, result: update::CheckResult) {
+    let a = app();
+    a.update_checking = false;
+    match result {
+        update::CheckResult::Available(info) => {
+            dbgmsg!("update available: {} {}", info.version, info.url);
+            a.update_available = Some(info.clone());
+            notify(&format!(
+                "发现新版本 {} —— 右键托盘图标选“下载新版本”，或点一下本提示。",
+                info.version
+            ));
+        }
+        update::CheckResult::UpToDate => {
+            dbgmsg!("update check: already current");
+            if manual {
+                notify(&format!("已是最新版本 v{}。", update::VERSION));
+            }
+        }
+        update::CheckResult::Failed(e) => {
+            dbgmsg!("update check failed: {e}");
+            if manual {
+                notify(&format!("检查更新失败: {e}"));
+            }
+        }
+    }
+    update_tray();
+}
+
+/// Turn the startup check on or off, and persist the choice.
+fn toggle_update_check() {
+    let a = app();
+    a.watcher.cfg.check_update = !a.watcher.cfg.check_update;
+    let on = a.watcher.cfg.check_update;
+    let _ = a.watcher.cfg.save();
+    notify(if on {
+        "已开启：启动时自动检查更新。"
+    } else {
+        "已关闭：不再联网检查更新。"
+    });
+    update_tray();
+}
+
+/// Open the release page for the newer version. If none is known yet, run a
+/// check instead of opening something arbitrary.
+fn open_update_page() {
+    let a = app();
+    match a.update_available.as_ref() {
+        Some(info) => open_url(&info.url),
+        None => {
+            notify("还没有可用的新版本，先检查一下。");
+            start_update_check(true);
+        }
+    }
+}
+
+fn open_url(url: &str) {
+    let a = app();
+    let op = to_wide("open");
+    let file = to_wide(url);
+    unsafe {
+        ShellExecuteW(
+            a.hwnd,
+            op.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
 }
 
 fn update_tray() {

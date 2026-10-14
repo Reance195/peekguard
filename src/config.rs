@@ -178,6 +178,9 @@ pub struct Config {
     /// `未知配置项` after an upgrade. `to_text` only writes it back when it is set
     /// to a non-default value.
     pub skip_minimized: bool,
+    /// Check GitHub for a newer release on startup. This is the only thing that
+    /// ever touches the network, so it can be turned off entirely.
+    pub check_update: bool,
 }
 
 impl Default for Config {
@@ -192,6 +195,7 @@ impl Default for Config {
             rules: Vec::new(),
             hide_only_when_focused: false,
             skip_minimized: true,
+            check_update: true,
         }
     }
 }
@@ -289,6 +293,9 @@ impl Config {
                 "hide_only_when_focused" | "only_focused" => {
                     cfg.hide_only_when_focused = parse_bool(value)
                 }
+                "check_update" | "update_check" | "check_updates" => {
+                    cfg.check_update = parse_bool(value)
+                }
                 "skip_minimized" => {
                     // Inert: minimized windows are always skipped now. Parsed so old
                     // config files keep loading, and surfaced once as a note.
@@ -354,6 +361,11 @@ impl Config {
             "hide_only_when_focused = {}",
             self.hide_only_when_focused
         );
+        let _ = writeln!(
+            s,
+            "# true = 启动时向 GitHub 查询新版本（唯一的联网行为；false 完全不联网）"
+        );
+        let _ = writeln!(s, "check_update = {}", self.check_update);
         if self.skip_minimized != Config::default().skip_minimized {
             let _ = writeln!(
                 s,

@@ -1,9 +1,10 @@
 # Security Policy
 
-PeekGuard is a single-process Windows tray application. It has no network code of any
-kind, no dependencies, and no installer, so there is very little here to attack. This
-page says what is in scope, what is deliberately out of scope, and how to report a
-problem.
+PeekGuard is a single-process Windows tray application. It has no dependencies and no
+installer, and its only network code is an optional, opt-out update check (one anonymous
+`GET` to the GitHub Releases API, hand-bound to WinHTTP in `src/update.rs`), so there is
+very little here to attack. This page says what is in scope, what is deliberately out of
+scope, and how to report a problem.
 
 ## Supported versions
 
@@ -48,9 +49,12 @@ There is no security mailing list. The advisory form is the only monitored chann
   another process with write access. There is no `WriteProcessMemory`, no
   `CreateRemoteThread`, no `SetWindowsHookEx`, no subclassing. Bugs that require one of
   those do not apply.
-- **Network exposure.** The program never opens a socket, never loads a URL, and never
-  spawns a child process. If you find network traffic coming from `peekguard.exe`, it
-  did not come from this source tree.
+- **Network exposure beyond the update check.** The only request the program can make is
+  the update check described above: a single `GET` to
+  `https://api.github.com/repos/Reance195/peekguard/releases/latest`, opt-out via
+  `check_update = false`. It never loads an arbitrary URL, never downloads or executes a
+  payload, and never spawns a child process. Any *other* traffic attributed to
+  `peekguard.exe` did not come from this source tree.
 - **Missing code signing.** The released exe is unsigned, and signing is not currently
   in place (see the code signing policy in the README); the consequences of that —
   SmartScreen warnings and Smart App Control rejecting the file — are known and

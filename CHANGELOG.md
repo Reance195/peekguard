@@ -12,11 +12,14 @@ All notable changes to this project are documented here. The format is based on
   windowless run is no longer silent. Any crash-recovery count and config note are
   folded into the same balloon.
 - **Embedded application icon:** the exe now carries a multi-size icon (16–128 px), generated at build time by `build.rs` from the same pure-Rust rasteriser the tray uses — no `.ico` file and no resource compiler. Explorer, the desktop shortcut and the taskbar now show the PeekGuard eye instead of the generic exe icon. (Exe grows to ~380 KB.)
+- **Update check:** PeekGuard can now tell you when a newer release exists. On startup, and on demand from the tray menu, it makes a single anonymous `GET` to the public GitHub Releases API and compares its version with the latest `tag_name`; if a newer one exists it shows a tray balloon that opens the release page in your browser. This is the program's only network code — written by hand against WinHTTP in `src/update.rs`, so the zero-dependency promise holds — and it is opt-out via `check_update = false`, which leaves the app fully offline. No machine or user information is sent.
 
 ### Changed
 
 - **About dialog:** Replaced the plain system message box with a custom-painted About window that displays the app icon, version, hotkeys, and a clickable GitHub link. The window now scales with the monitor DPI.
 - **Window picker:** `Ctrl+Alt+P` and the tray "选择窗口并绑定…" item now open a crosshair picker. Move the cursor to highlight the target window's border, left-click to bind it, or right-click/Esc to cancel (no background dimming).
+- **Single version source:** the About window's version now comes from `Cargo.toml` via `env!("CARGO_PKG_VERSION")` instead of a hard-coded string, so bumping the manifest updates every surface at once.
+- **Privacy wording:** the README and SECURITY pages now describe the optional update check accurately instead of claiming the app has no network code at all.
 
 ## [0.1.0] — 2026-10-13
 

@@ -15,6 +15,7 @@ pub type HICON = *mut c_void;
 pub type HCURSOR = *mut c_void;
 pub type HBRUSH = *mut c_void;
 pub type HANDLE = *mut c_void;
+pub type HINTERNET = *mut c_void;
 pub type HKEY = *mut c_void;
 pub type WPARAM = usize;
 pub type LPARAM = isize;
@@ -97,6 +98,13 @@ pub const KEY_QUERY_VALUE: u32 = 0x0001;
 pub const KEY_SET_VALUE: u32 = 0x0002;
 pub const REG_SZ: u32 = 1;
 
+// ---- update check (WinHTTP). The only network code in PeekGuard.
+pub const WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY: u32 = 4;
+pub const WINHTTP_FLAG_SECURE: u32 = 0x0080_0000;
+pub const WINHTTP_QUERY_STATUS_CODE: u32 = 19;
+pub const WINHTTP_QUERY_FLAG_NUMBER: u32 = 0x2000_0000;
+pub const INTERNET_DEFAULT_HTTPS_PORT: u16 = 443;
+
 // ---- messages
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_PAINT: u32 = 0x000F;
@@ -107,6 +115,7 @@ pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_HOTKEY: u32 = 0x0312;
+pub const WM_USER: u32 = 0x0400;
 pub const WM_APP: u32 = 0x8000;
 pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_LBUTTONUP: u32 = 0x0201;
@@ -133,6 +142,8 @@ pub const NIF_ICON: u32 = 0x02;
 pub const NIF_TIP: u32 = 0x04;
 pub const NIF_INFO: u32 = 0x10;
 pub const IDI_APPLICATION: u16 = 32512;
+/// Sent to the tray callback when the user clicks an info balloon (`NIF_INFO`).
+pub const NIN_BALLOONUSERCLICK: u32 = WM_USER + 5;
 
 pub const HWND_MESSAGE: HWND = -3isize as HWND;
 pub const HWND_TOPMOST: HWND = -1isize as HWND;
@@ -422,6 +433,66 @@ unsafe extern "system" {
         dir: *const u16,
         show: i32,
     ) -> *mut c_void;
+}
+
+#[link(name = "winhttp")]
+unsafe extern "system" {
+    pub fn WinHttpOpen(
+        agent: *const u16,
+        access: u32,
+        proxy: *const u16,
+        bypass: *const u16,
+        flags: u32,
+    ) -> HINTERNET;
+    pub fn WinHttpConnect(
+        session: HINTERNET,
+        server: *const u16,
+        port: u16,
+        reserved: u32,
+    ) -> HINTERNET;
+    #[allow(clippy::too_many_arguments)]
+    pub fn WinHttpOpenRequest(
+        connect: HINTERNET,
+        verb: *const u16,
+        object: *const u16,
+        version: *const u16,
+        referrer: *const u16,
+        accept_types: *const *const u16,
+        flags: u32,
+    ) -> HINTERNET;
+    pub fn WinHttpSendRequest(
+        request: HINTERNET,
+        headers: *const u16,
+        headers_len: u32,
+        optional: *mut c_void,
+        optional_len: u32,
+        total_len: u32,
+        context: usize,
+    ) -> BOOL;
+    pub fn WinHttpReceiveResponse(request: HINTERNET, reserved: *mut c_void) -> BOOL;
+    pub fn WinHttpQueryHeaders(
+        request: HINTERNET,
+        info_level: u32,
+        name: *const u16,
+        buffer: *mut c_void,
+        buffer_len: *mut u32,
+        index: *mut u32,
+    ) -> BOOL;
+    pub fn WinHttpReadData(
+        request: HINTERNET,
+        buffer: *mut c_void,
+        to_read: u32,
+        read: *mut u32,
+    ) -> BOOL;
+    /// Bound every phase so an offline machine cannot stall the check thread.
+    pub fn WinHttpSetTimeouts(
+        h: HINTERNET,
+        resolve: i32,
+        connect: i32,
+        send: i32,
+        receive: i32,
+    ) -> BOOL;
+    pub fn WinHttpCloseHandle(h: HINTERNET) -> BOOL;
 }
 
 #[link(name = "advapi32")]

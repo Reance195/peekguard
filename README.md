@@ -186,6 +186,10 @@ hide_only_when_focused = false
 # effect.
 skip_minimized = true
 
+# true = ask GitHub for a newer release on startup. This is the only thing in
+# PeekGuard that ever touches the network; set it to false to stay fully offline.
+check_update = true
+
 # windows bound automatically at startup (may be empty)
 autobind =
 
@@ -198,6 +202,27 @@ rule = process:msedge.exe | title:novel,stocks
 Rule fields: `process:` (process name, case-insensitive), `class:` (window class name),
 `title:` (title substring; comma-separated values mean "or"). Multiple fields on one line
 are combined with **AND**.
+
+## Checking for updates
+
+PeekGuard can tell you when a newer release is out. On startup it makes a single
+unauthenticated `GET` to the public GitHub Releases API
+(`https://api.github.com/repos/Reance195/peekguard/releases/latest`) and compares the
+`tag_name` with its own version. If a newer one exists it shows a tray balloon; click
+the balloon, or pick tray menu → "download version vX.Y.Z", to open the release page in
+your browser. Nothing is ever downloaded or launched automatically by PeekGuard itself.
+
+- Tray menu → "check for updates" runs a check on demand, and reports that you are
+  current or the reason it failed.
+- Tray menu → "check for updates at startup" toggles the startup check (the checkmark
+  is stored as `check_update` in the config).
+- Set `check_update = false` to turn it off completely. With that set, PeekGuard makes
+  no network request of any kind.
+
+The check sends no information about you or your machine — no identifiers, no usage
+data, no telemetry. It is the only network code in the program, and it is written by
+hand against WinHTTP in `src/update.rs` (no crate); the rest of `src/win.rs` remains
+the complete list of Win32 APIs the program imports.
 
 ## Known limitations
 
@@ -314,9 +339,12 @@ person. The first additional contributor to be merged is expected to take over R
 
 ### Privacy
 
-**PeekGuard transfers no information to other networked systems.** There is no network
-code in it at all — no telemetry, no update check, no crash reporting. The complete set
-of Win32 APIs it imports is visible in `src/win.rs`; none of them open a socket or an
+**PeekGuard collects nothing about you.** There is no telemetry, no analytics, and no
+crash reporting. The only network request it can make is the optional update check
+described above — a single anonymous `GET` to the public GitHub Releases API that
+carries no identifiers and no usage data. Set `check_update = false` and it goes fully
+offline. The Win32 APIs it imports are visible in `src/win.rs` (the one HTTPS request is
+hand-bound in `src/update.rs`); apart from that, none of them open a socket or an
 internet connection. It ships with zero third-party dependencies
 (`Cargo.toml` has no `[dependencies]` section).
 

@@ -12,11 +12,11 @@
 #![allow(non_snake_case)]
 
 use crate::icon;
+use crate::update::VERSION;
 use crate::win::*;
 use std::ffi::c_void;
 
 const ABOUT_CLASS: &str = "PeekGuard.About.v1";
-const VERSION: &str = "0.1.0";
 const URL: &str = "https://github.com/Reance195/peekguard";
 const URL_LABEL: &str = "github.com/Reance195/peekguard";
 

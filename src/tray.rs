@@ -20,6 +20,9 @@ pub const CMD_SCAN: usize = 132;
 pub const CMD_RELOAD: usize = 140;
 pub const CMD_OPEN_CONFIG: usize = 141;
 pub const CMD_AUTOSTART: usize = 160;
+pub const CMD_CHECK_UPDATE: usize = 170;
+pub const CMD_UPDATE_TOGGLE: usize = 171;
+pub const CMD_OPEN_UPDATE: usize = 172;
 pub const CMD_ABOUT: usize = 150;
 pub const CMD_QUIT: usize = 199;
 
@@ -92,6 +95,10 @@ pub struct MenuState {
     /// Rule scanning is not paused.
     pub scan_enabled: bool,
     pub autostart: bool,
+    /// Check GitHub for a new release on startup.
+    pub check_update: bool,
+    /// Version of a newer release the last check found, if any.
+    pub update_available: Option<String>,
 }
 
 /// Show the context menu and return the chosen command id (0 = dismissed).
@@ -198,6 +205,18 @@ pub fn show_menu(menu_owner: HWND, st: &MenuState) -> usize {
             MF_STRING
         };
         append(menu, startup_flags, CMD_AUTOSTART, "开机自动启动");
+
+        let update_flags = if st.check_update {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        append(menu, update_flags, CMD_UPDATE_TOGGLE, "启动时自动检查更新");
+
+        append(menu, MF_STRING, CMD_CHECK_UPDATE, "检查更新…");
+        if let Some(v) = &st.update_available {
+            append(menu, MF_STRING, CMD_OPEN_UPDATE, &format!("下载新版本 {v}"));
+        }
 
         append(menu, MF_SEPARATOR, 0, "");
 

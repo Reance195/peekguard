@@ -164,6 +164,10 @@ hide_only_when_focused = false
 # 为了让旧配置不报警，值不再有任何效果。
 skip_minimized = true
 
+# true = 启动时向 GitHub 查询新版本。这是 PeekGuard 唯一的联网行为；
+# 设为 false 则完全不联网。
+check_update = true
+
 # 启动时自动绑定的窗口（可留空）
 autobind =
 
@@ -175,6 +179,22 @@ rule = process:msedge.exe | title:小说,股票
 
 规则字段：`process:`（进程名，忽略大小写）、`class:`（窗口类名）、`title:`（标题子串，逗号分隔表示"或"）。
 同一行内的多个字段是**与**关系。
+
+## 检查更新
+
+PeekGuard 可以告诉你有没有新版本。启动时会向公开的 GitHub Releases API
+（`https://api.github.com/repos/Reance195/peekguard/releases/latest`）发一次匿名 `GET`，
+把返回的 `tag_name` 与自身版本比较。若有更新，弹一个托盘气泡提示；点气泡，或选托盘菜单
+→「下载新版本 vX.Y.Z」，会用浏览器打开对应的 Release 页面。PeekGuard 自己**从不自动下载
+或启动**任何东西。
+
+- 托盘菜单 →「检查更新…」立即查一次：有新版本给提示，否则报「已是最新版本」或失败原因。
+- 托盘菜单 →「启动时自动检查更新」开关启动检查（勾选状态存到配置项 `check_update`）。
+- 把 `check_update` 设为 `false` 即可彻底关闭；此时 PeekGuard 不发起任何网络请求。
+
+这次检查不上传你的任何信息——没有设备标识、没有使用数据、没有遥测。它是程序里**唯一**的
+网络代码，位于 `src/update.rs`，用 WinHTTP 手写（不引入 crate）；`src/win.rs` 依然是它导入
+的全部 Win32 API 清单。
 
 ## 已知限制
 
@@ -275,9 +295,11 @@ SDK 头文件逐行对得上，改名反而更难核对。
 
 ### 隐私
 
-**PeekGuard 不会向任何网络系统传输信息。** 它完全没有网络代码 —— 无遥测、无更新检查、无崩溃上报。
-`src/win.rs` 里列出了它导入的全部 Win32 API，其中没有任何一个用于打开套接字或网络连接。
-项目零第三方依赖（`Cargo.toml` 没有 `[dependencies]` 段）。
+**PeekGuard 不收集你的任何信息。** 无遥测、无统计、无崩溃上报。它唯一可能发起的网络请求，
+就是上面那一次可选的更新检查 —— 一次向公开 GitHub Releases API 的匿名 `GET`，不携带任何标识
+或使用数据。把 `check_update = false` 一设，它就彻底不联网。它导入的 Win32 API 都在
+`src/win.rs` 里列出（唯一的 HTTPS 请求手写在 `src/update.rs`）；除此之外，没有任何一个用于
+打开套接字或网络连接。项目零第三方依赖（`Cargo.toml` 没有 `[dependencies]` 段）。
 
 它写入的文件全部在本地，完整清单如下：
 
