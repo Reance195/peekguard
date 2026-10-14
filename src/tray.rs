@@ -104,7 +104,7 @@ pub fn show_menu(menu_owner: HWND, st: &MenuState) -> usize {
 
         let bind_label = match &st.bound {
             Some(desc) => format!("解绑  ({})", desc),
-            None => "绑定当前窗口  (Ctrl+Alt+P)".to_string(),
+            None => "选择窗口并绑定…  (Ctrl+Alt+P)".to_string(),
         };
         append(menu, MF_STRING, CMD_BIND, &bind_label);
 

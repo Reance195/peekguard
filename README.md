@@ -57,20 +57,20 @@ PeekGuard then sits in the tray; it has no main window.
 
 | Action | Hotkey |
 |---|---|
-| Bind / unbind the foreground window | `Ctrl+Alt+P` |
+| Bind a window via crosshair picker | `Ctrl+Alt+P` |
 | Hide / restore right now | `Ctrl+Alt+H` |
 | Toggle latch mode | `Ctrl+Alt+L` |
 
 Tray icon:
 
-- **Double-click** — bind / unbind the foreground window
+- **Double-click** — bind a window via crosshair picker
 - **Right-click** — full menu (hide strategy, rule auto-protection, delay, latch,
   save rule, run at login, reload config, quit)
 
 ### The usual flow
 
 1. Switch to the window you want guarded (QQ, a browser, your stock app…)
-2. Press `Ctrl+Alt+P` — the tray reports `bound: QQ.exe — my chat window`
+2. Press `Ctrl+Alt+P` — a crosshair appears; highlight the target window and left-click to bind
 3. Move the mouse away and the window hides; move back to the same spot and it returns
 4. If you like it, tray → "save the current binding as a standing rule" and every
    launch from now on is guarded automatically

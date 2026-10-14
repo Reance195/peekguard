@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Window picker:** `Ctrl+Alt+P` and the tray "选择窗口并绑定…" item now open a crosshair picker. Move the cursor to highlight the target window's border, left-click to bind it, or right-click/Esc to cancel (no background dimming).
+- **About dialog:** Replaced the plain system message box with a custom-painted About window that displays the app icon, version, hotkeys, and a clickable GitHub link.
+
 ## [0.1.0] — 2026-10-13
 
 First public release.

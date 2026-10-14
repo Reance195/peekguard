@@ -27,6 +27,14 @@ pub const GWL_EXSTYLE: i32 = -20;
 pub const WS_EX_TRANSPARENT: isize = 0x0000_0020;
 pub const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
 pub const WS_EX_LAYERED: isize = 0x0008_0000;
+pub const WS_EX_TOPMOST: isize = 0x0000_0008;
+pub const WS_EX_NOACTIVATE: isize = 0x0800_0000;
+
+// ---- window classes (styles / hit-testing)
+pub const WS_POPUP: u32 = 0x8000_0000;
+pub const WS_CAPTION: u32 = 0x00C0_0000;
+pub const WS_SYSMENU: u32 = 0x0008_0000;
+pub const GA_ROOT: u32 = 2;
 
 // ---- layered window
 pub const LWA_COLORKEY: u32 = 0x1;
@@ -34,8 +42,28 @@ pub const LWA_ALPHA: u32 = 0x2;
 
 // ---- ShowWindow
 pub const SW_HIDE: i32 = 0;
+pub const SW_SHOWNORMAL: i32 = 1;
 pub const SW_SHOWMINNOACTIVE: i32 = 7;
 pub const SW_SHOWNA: i32 = 8;
+
+// ---- stock cursors / GDI text
+pub const IDC_ARROW: u16 = 32512;
+pub const IDC_CROSS: u16 = 32515;
+pub const IDC_HAND: u16 = 32649;
+pub const TRANSPARENT: i32 = 1;
+pub const FW_NORMAL: i32 = 400;
+pub const FW_SEMIBOLD: i32 = 600;
+pub const DEFAULT_CHARSET: u32 = 1;
+pub const DT_LEFT: u32 = 0x0000;
+pub const DT_VCENTER: u32 = 0x0004;
+pub const DT_SINGLELINE: u32 = 0x0020;
+pub const DT_CALCRECT: u32 = 0x0400;
+pub const DT_NOPREFIX: u32 = 0x0800;
+
+// ---- virtual keys we poll
+pub const VK_LBUTTON: i32 = 0x01;
+pub const VK_RBUTTON: i32 = 0x02;
+pub const VK_ESCAPE: i32 = 0x1B;
 
 // ---- SetWindowPos
 pub const SWP_NOSIZE: u32 = 0x0001;
@@ -71,12 +99,17 @@ pub const REG_SZ: u32 = 1;
 
 // ---- messages
 pub const WM_DESTROY: u32 = 0x0002;
+pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
+pub const WM_ERASEBKGND: u32 = 0x0014;
+pub const WM_SETCURSOR: u32 = 0x0020;
+pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_HOTKEY: u32 = 0x0312;
 pub const WM_APP: u32 = 0x8000;
 pub const WM_RBUTTONUP: u32 = 0x0205;
+pub const WM_LBUTTONUP: u32 = 0x0201;
 pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
 pub const WM_CONTEXTMENU: u32 = 0x007B;
 pub const WM_NULL: u32 = 0x0000;
@@ -225,6 +258,24 @@ impl Default for NOTIFYICONDATAW {
     }
 }
 
+/// Paint state, mirroring `PAINTSTRUCT`. `BeginPaint` fills it; `EndPaint` reads it.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PAINTSTRUCT {
+    pub hdc: *mut c_void,
+    pub fErase: BOOL,
+    pub rcPaint: RECT,
+    pub fRestore: BOOL,
+    pub fIncUpdate: BOOL,
+    pub rgbReserved: [u8; 32],
+}
+
+impl Default for PAINTSTRUCT {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 // ================================================================ imports
 
 #[link(name = "user32")]
@@ -300,6 +351,24 @@ unsafe extern "system" {
         cb: Option<unsafe extern "system" fn(HWND, LPARAM) -> BOOL>,
         lparam: LPARAM,
     ) -> BOOL;
+    pub fn WindowFromPoint(p: POINT) -> HWND;
+    pub fn GetAncestor(h: HWND, flags: u32) -> HWND;
+    pub fn GetAsyncKeyState(vk: i32) -> i16;
+    pub fn LoadCursorW(inst: HINSTANCE, name: *const u16) -> HCURSOR;
+    pub fn SetCursor(c: HCURSOR) -> HCURSOR;
+    pub fn SetCapture(h: HWND) -> HWND;
+    pub fn ReleaseCapture() -> BOOL;
+    pub fn GetClientRect(h: HWND, r: *mut RECT) -> BOOL;
+    pub fn BeginPaint(h: HWND, ps: *mut PAINTSTRUCT) -> *mut c_void;
+    pub fn EndPaint(h: HWND, ps: *const PAINTSTRUCT) -> BOOL;
+    pub fn InvalidateRect(h: HWND, r: *const RECT, erase: BOOL) -> BOOL;
+    pub fn FillRect(dc: *mut c_void, r: *const RECT, brush: HBRUSH) -> i32;
+    pub fn FrameRect(dc: *mut c_void, r: *const RECT, brush: HBRUSH) -> i32;
+    pub fn DrawTextW(dc: *mut c_void, text: *const u16, n: i32, r: *mut RECT, fmt: u32) -> i32;
+    pub fn DrawIcon(dc: *mut c_void, x: i32, y: i32, icon: HICON) -> BOOL;
+    pub fn AdjustWindowRect(r: *mut RECT, style: u32, menu: BOOL) -> BOOL;
+    pub fn ClientToScreen(h: HWND, p: *mut POINT) -> BOOL;
+    pub fn FindWindowW(class: *const u16, name: *const u16) -> HWND;
 }
 
 #[link(name = "kernel32")]
@@ -316,9 +385,42 @@ unsafe extern "system" {
     pub fn Sleep(ms: u32);
 }
 
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    pub fn CreateSolidBrush(color: COLORREF) -> HBRUSH;
+    pub fn DeleteObject(o: *mut c_void) -> BOOL;
+    pub fn SelectObject(dc: *mut c_void, o: *mut c_void) -> *mut c_void;
+    pub fn SetTextColor(dc: *mut c_void, color: COLORREF) -> COLORREF;
+    pub fn SetBkMode(dc: *mut c_void, mode: i32) -> i32;
+    pub fn CreateFontW(
+        height: i32,
+        width: i32,
+        escapement: i32,
+        orientation: i32,
+        weight: i32,
+        italic: u32,
+        underline: u32,
+        strike: u32,
+        charset: u32,
+        out_precision: u32,
+        clip_precision: u32,
+        quality: u32,
+        pitch_family: u32,
+        face: *const u16,
+    ) -> *mut c_void;
+}
+
 #[link(name = "shell32")]
 unsafe extern "system" {
     pub fn Shell_NotifyIconW(msg: u32, data: *const NOTIFYICONDATAW) -> BOOL;
+    pub fn ShellExecuteW(
+        hwnd: HWND,
+        op: *const u16,
+        file: *const u16,
+        params: *const u16,
+        dir: *const u16,
+        show: i32,
+    ) -> *mut c_void;
 }
 
 #[link(name = "advapi32")]

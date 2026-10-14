@@ -1,7 +1,7 @@
 """End-to-end test for PeekGuard against a real, disposable window.
 
 Covers the whole contract:
-  1. bind a window via the Ctrl+Alt+P hotkey
+  1. bind a window through the Ctrl+Alt+P crosshair picker
   2. visible while the cursor is inside
   3. hidden after the cursor leaves (past the debounce)
   4. restored when the cursor comes back to the same rect, geometry intact
@@ -26,12 +26,17 @@ GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
 WM_COMMAND = 0x0111
 CMD_QUIT = 199
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+VK_ESCAPE = 0x1B
+PICKER_CLASS = "PeekGuard.Picker.v1"
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
 SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 
 u32.GetWindowLongPtrW.argtypes = [W.HWND, C.c_int]
 u32.GetWindowLongPtrW.restype = C.c_ssize_t
 u32.SetCursorPos.argtypes = [C.c_int, C.c_int]
+u32.mouse_event.argtypes = [W.DWORD, W.DWORD, W.DWORD, W.DWORD, C.c_size_t]
 u32.GetLayeredWindowAttributes.argtypes = [
     W.HWND, C.POINTER(W.DWORD), C.POINTER(C.c_ubyte), C.POINTER(W.DWORD)
 ]
@@ -224,24 +229,37 @@ def focus_window(hwnd, tries=6):
     return u32.GetForegroundWindow() == hwnd
 
 
+def click_at(x, y):
+    """Move the cursor and synthesise a left click for the picker."""
+    u32.SetCursorPos(x, y)
+    time.sleep(0.25)  # allow picker tick to highlight the target under cursor
+    u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(0.05)
+    u32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
+def cancel_picker():
+    """Close a lingering picker (prior failed attempt) before retrying."""
+    cls = C.create_unicode_buffer(PICKER_CLASS)
+    if u32.FindWindowW(cls, None):
+        u32.keybd_event(VK_ESCAPE, 0, 0, 0)
+        time.sleep(0.05)
+        u32.keybd_event(VK_ESCAPE, 0, 2, 0)
+        time.sleep(0.2)
+
+
 def bind_target(hwnd, tries=5):
-    """Bind `hwnd` with the real hotkey chord and confirm the bind actually took.
-
-    A synthesised chord can be dropped (another process has the combination, the
-    input queue coalesces it, the window is not foreground yet). Left unchecked that
-    turns into a *later* failure that looks like something else entirely: a test that
-    never bound cannot hide anything, so the crash-recovery checks then fail on a
-    missing journal entry even though recovery is fine. Confirming the bind keeps the
-    hotkey's flakiness out of the checks that are not about the hotkey.
-
-    Verified through `is_hidden` rather than the log, because "it hid" is the thing
-    the rest of the suite depends on.
-    """
+    """Bind `hwnd` through the crosshair picker (Ctrl+Alt+P) and confirm it took."""
     for _ in range(tries):
+        cancel_picker()
         focus_window(hwnd)
-        time.sleep(0.3)
-        u32.SetCursorPos(2, 2)  # park away, so a successful bind hides promptly
+        time.sleep(0.25)
         send_hotkey()
+        time.sleep(0.3)  # picker opens; grace window ~150 ms
+        b = rect(hwnd)
+        cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
+        click_at(cx, cy)
+        u32.SetCursorPos(2, 2)  # park away so a successful bind hides promptly
         if wait_until(lambda: is_hidden(hwnd), 2.5):
             return True
     return False
@@ -318,19 +336,20 @@ def main():
         cx, cy = (base[0] + base[2]) // 2, (base[1] + base[3]) // 2
         print(f"target hwnd={hwnd:#x} rect={base} alpha={alpha_of(hwnd)} exstyle={exstyle(hwnd):#x}")
 
-        # --- 1. bind via hotkey
+        # --- 1. bind via picker
         focus_window(hwnd)
         time.sleep(0.5)
         check("target is foreground", u32.GetForegroundWindow() == hwnd)
-        u32.SetCursorPos(cx, cy)
-        time.sleep(0.3)
-        check("bind hotkey took effect", bind_target(hwnd), "retries the chord until the window hides once")
+        check("bind through picker took effect", bind_target(hwnd), "drives crosshair picker until window hides once")
         u32.SetCursorPos(cx, cy)
         check(
             "restored when cursor returns after binding",
             wait_until(lambda: not is_hidden(hwnd), 5.0),
             f"alpha={alpha_of(hwnd)}",
         )
+        # ensure cursor is over the target so the next checks behave deterministically
+        u32.SetCursorPos(cx, cy)
+        time.sleep(0.3)
         check("peekguard still alive after bind hotkey", pg.poll() is None)
 
         # --- 2. visible while cursor inside

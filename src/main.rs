@@ -4,10 +4,12 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod autostart;
 mod config;
 mod hide;
 mod icon;
+mod picker;
 mod rules;
 mod session;
 mod tray;
@@ -33,6 +35,8 @@ struct App {
     scanner: rules::Scanner,
     tray: Option<Tray>,
     hwnd: HWND,
+    /// Crosshair window picker, while the user is choosing a window to bind.
+    picker: Option<picker::Picker>,
 }
 
 static mut APP: *mut App = std::ptr::null_mut();
@@ -119,6 +123,7 @@ fn main() {
         scanner: rules::Scanner::new(),
         tray: None,
         hwnd: std::ptr::null_mut(),
+        picker: None,
     };
     unsafe {
         APP = &mut state;
@@ -182,7 +187,7 @@ fn install_panic_guard() {
 /// the 1 Hz rate limit is the only throttling it needs.
 fn scan_rules() {
     let a = app();
-    if a.watcher.target.is_some() {
+    if a.watcher.target.is_some() || a.picker.is_some() {
         return;
     }
     if !a.scanner.due(tick_ms()) {
@@ -392,6 +397,23 @@ static TICK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 
 fn on_tick() {
     let a = app();
+    if a.picker.is_some() {
+        // While picking, the tick belongs to the picker: no rule scanning, no
+        // watching — the user is mid-gesture and the bound window is untouched.
+        let outcome = a.picker.as_mut().unwrap().tick(tick_ms());
+        match outcome {
+            picker::Outcome::Continue => {}
+            picker::Outcome::Cancel => {
+                a.picker = None; // dropping the picker tears its frame down
+                notify("已取消绑定。");
+            }
+            picker::Outcome::Pick(h) => {
+                a.picker = None;
+                bind_window(h);
+            }
+        }
+        return;
+    }
     scan_rules();
     let before = a.watcher.state;
     // Capture the handle: a refused hide clears the binding as part of the action,
@@ -448,9 +470,16 @@ fn on_tick() {
 fn toggle_bind() {
     let a = app();
     dbgmsg!(
-        "toggle_bind: currently bound={}",
-        a.watcher.target.is_some()
+        "toggle_bind: currently bound={} picking={}",
+        a.watcher.target.is_some(),
+        a.picker.is_some()
     );
+    // The hotkey doubles as a cancel while the picker is up.
+    if a.picker.is_some() {
+        a.picker = None;
+        notify("已取消绑定。");
+        return;
+    }
     if a.watcher.target.is_some() {
         // Release just this window; the rules keep working for others.
         if let Some(t) = &a.watcher.target {
@@ -460,30 +489,50 @@ fn toggle_bind() {
         a.watcher.unbind();
         session::write(&[]);
         notify("已解绑（这条规则不再接管这个窗口）。");
+        update_tray();
     } else {
-        let fg = unsafe { GetForegroundWindow() };
-        dbgmsg!(
-            "toggle_bind: fg={:?} title={:?} proc={:?} self={:?}",
-            fg,
-            window_title(fg),
-            process_name(process_id(fg)),
-            a.hwnd
-        );
-        if fg == a.hwnd || !is_valid(fg) {
-            notify("找不到可以绑定的前台窗口。");
-        } else if a.watcher.bind(fg) {
-            // Binding by hand overrides any earlier suppression of this window.
-            a.scanner.note_bound(fg);
-            let desc = a
-                .watcher
-                .target
-                .as_ref()
-                .map(|t| t.describe())
-                .unwrap_or_default();
-            notify(&format!("已绑定: {desc}"));
-        } else {
-            notify("这个窗口不支持绑定。");
+        open_picker();
+    }
+}
+
+/// Open the crosshair picker, so the user chooses which window to bind.
+fn open_picker() {
+    let a = app();
+    if a.picker.is_some() {
+        return;
+    }
+    match picker::Picker::open() {
+        Some(p) => {
+            a.picker = Some(p);
+            notify("移动到要保护的窗口上，点击绑定；右键或 Esc 取消。");
         }
+        None => notify("无法打开窗口选择器。"),
+    }
+}
+
+/// Bind a specific window (used once the picker has a selection).
+fn bind_window(h: HWND) {
+    let a = app();
+    dbgmsg!(
+        "bind_window: hwnd={:?} title={:?} proc={:?}",
+        h,
+        window_title(h),
+        process_name(process_id(h))
+    );
+    if h == a.hwnd || !is_valid(h) {
+        notify("找不到可以绑定的窗口。");
+    } else if a.watcher.bind(h) {
+        // Binding by hand overrides any earlier suppression of this window.
+        a.scanner.note_bound(h);
+        let desc = a
+            .watcher
+            .target
+            .as_ref()
+            .map(|t| t.describe())
+            .unwrap_or_default();
+        notify(&format!("已绑定: {desc}"));
+    } else {
+        notify("这个窗口不支持绑定。");
     }
     update_tray();
 }
@@ -698,17 +747,7 @@ fn open_config() {
 
 fn about() {
     let a = app();
-    let msg = format!(
-        "PeekGuard 0.1.0\n\n\
-         热键:\n  Ctrl+Alt+P  绑定/解绑当前窗口\n  Ctrl+Alt+H  立即隐身/恢复\n  Ctrl+Alt+L  切换锁存模式\n\n\
-         当前: {}，方式 {}，延迟 {} ms\n\
-         配置文件: {}",
-        a.watcher.state.label(),
-        tray::mode_name(a.watcher.cfg.mode),
-        a.watcher.cfg.delay_ms,
-        Config::config_path().display()
-    );
-    message_box(&msg, "关于 PeekGuard", 0x40);
+    about::show(a.hwnd);
 }
 
 fn update_tray() {
