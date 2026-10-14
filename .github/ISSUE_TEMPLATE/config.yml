@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/Reance195/peekguard/issues/new/choose
+    about: Usage questions belong in an issue too, until there is enough traffic to justify a discussion forum.
+  - name: Security vulnerability
+    url: https://github.com/Reance195/peekguard/security/advisories/new
+    about: Report anything exploitable privately — do not open a public issue.

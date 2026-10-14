@@ -1,0 +1,88 @@
+name: Bug report
+description: Something hid, never came back, or otherwise misbehaved.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: please search the existing issues, and please include the
+        Windows version and the build you actually ran. A window that stays hidden
+        after PeekGuard exits is the highest-priority class of bug here — if that is
+        what you hit, say so in the title.
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: e.g. Windows 11 24H2, build 26100.1742
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: Which build
+      description: A release exe or something you compiled yourself?
+      options:
+        - Release exe from GitHub Releases
+        - Built from source (cargo build --release)
+        - CI artifact
+    validations:
+      required: true
+
+  - type: dropdown
+    id: strategy
+    attributes:
+      label: Active hide strategy
+      description: Cycle from the tray menu; the default is alpha.
+      options:
+        - alpha
+        - move
+        - hide
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The more specific the better — an exact window title or application name helps a lot.
+      placeholder: |
+        1. Run PeekGuard, bind <application> with Ctrl+Alt+P
+        2. Move the cursor out of the window and wait
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What happened, and what should have happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Contents of %APPDATA%\PeekGuard\peekguard.conf
+      description: Paste the whole file. Remove nothing; secrets are not a thing here.
+      render: ini
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug log
+      description: Set PEEKGUARD_DEBUG=1, reproduce, then paste %APPDATA%\PeekGuard\debug.log.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Sanity checks
+      options:
+        - label: The bound window was a normal top-level window (not a UWP app, not a fullscreen exclusive game)
+          required: false
+        - label: I reproduced this with the default config and no `rule =` lines
+          required: false

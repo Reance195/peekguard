@@ -1,0 +1,46 @@
+name: Feature request
+description: An idea for something PeekGuard could do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        PeekGuard is intentionally tiny, and it is meant to stay that way. Requests are
+        judged against the four ground rules in CONTRIBUTING.md — no dependencies, no
+        intrusion into the target process, never strand a window, keep Win32 naming.
+        Please describe the problem first and the feature second; a problem statement
+        survives a design change.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, not the solution. e.g. "I share my screen for demos and want X to hide during them."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: How it should act, and what it should not do. Include the parts you considered and rejected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you have tried
+      description: Including other tools, and why they were not enough.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Constraints
+      options:
+        - label: This can be done without adding a crate dependency
+          required: false
+        - label: This does not require injecting, hooking, or subclassing another process
+          required: false
+        - label: This does not require elevation or network access
+          required: false
