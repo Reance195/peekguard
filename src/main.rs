@@ -151,16 +151,27 @@ fn main() {
     maybe_arm_test_panic();
 
     apply_autobind();
-    if recovered > 0 {
-        notify(&format!("已恢复上次异常退出时隐藏的 {recovered} 个窗口。"));
-    }
-    if let Some(n) = note {
-        if !n.is_empty() {
-            notify(&n);
-        }
-    }
     update_tray();
     scan_rules();
+
+    // Announce the launch. A normal run has no main window, so this balloon is the
+    // only thing telling the user PeekGuard came up. Skipped under PEEKGUARD_MUTEX
+    // (the end-to-end suites) where it would just be noise. The crash-recovery count
+    // and any config note ride along in the same balloon: the tray shows one
+    // `szInfo` at a time, so a second notify would only overwrite the first.
+    if std::env::var("PEEKGUARD_MUTEX").is_err() {
+        let mut msg = String::from("PeekGuard 已启动，正在托盘运行。");
+        if recovered > 0 {
+            msg.push_str(&format!("已恢复上次异常退出时隐藏的 {recovered} 个窗口。"));
+        }
+        if let Some(n) = note {
+            if !n.is_empty() {
+                msg.push(' ');
+                msg.push_str(&n);
+            }
+        }
+        notify(&msg);
+    }
 
     message_loop();
 }

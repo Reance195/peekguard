@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Startup notification:** PeekGuard now shows a tray balloon when it starts, so a
+  windowless run is no longer silent. Any crash-recovery count and config note are
+  folded into the same balloon.
 - **Embedded application icon:** the exe now carries a multi-size icon (16–128 px), generated at build time by `build.rs` from the same pure-Rust rasteriser the tray uses — no `.ico` file and no resource compiler. Explorer, the desktop shortcut and the taskbar now show the PeekGuard eye instead of the generic exe icon. (Exe grows to ~380 KB.)
 
 ### Changed
