@@ -22,7 +22,7 @@
 ```
 
 - **零依赖**：只用标准库 + 手写 Win32 FFI，没有 crates.io 依赖
-- **单文件 exe**：约 275 KB，免安装，运行在托盘
+- **单文件 exe**：约 380 KB，免安装，运行在托盘
 - **零侵入**：不注入、不子类化、不装全局钩子，对目标进程完全不碰
 - **绝不留残局**：崩溃、强杀、异常退出都会在下次启动时还原窗口
 - **常驻规则**：写一行 `rule =`，程序自己认出该保护哪些窗口
@@ -201,8 +201,8 @@ rule = process:msedge.exe | title:小说,股票
 ## 开发
 
 ```sh
-cargo build --release      # -> target/release/peekguard.exe (~275 KB，零依赖)
-cargo test                 # 17 个单元测试（零副作用，另有 1 个 #[ignore] 诊断用例）
+cargo build --release      # -> target/release/peekguard.exe (~380 KB，零依赖)
+cargo test                 # 22 个单元测试（运行 21 个，另 1 个 #[ignore] 诊断）
 
 # 端到端（会移动真实鼠标，需要交互式桌面）
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_live.py; done         # 23 项
@@ -240,7 +240,11 @@ SDK 头文件逐行对得上，改名反而更难核对。
 | `src/autostart.rs` | 开机自启（直接读写 HKCU Run，无子进程） |
 | `src/session.rs` | 崩溃恢复日志 |
 | `src/tray.rs` | 托盘图标 + 菜单 |
-| `src/icon.rs` | 运行时生成图标（无需资源编译器） |
+| `src/picker.rs` | 十字光标窗口选择器（置顶、点击穿透的覆盖层） |
+| `src/about.rs` | 自绘「关于」窗口 |
+| `src/icon.rs` | 运行时托盘图标（HICON），复用同一套渲染器 |
+| `src/icon_raster.rs` | 纯 Rust 图标渲染器 |
+| `build.rs` | 把应用图标嵌入 exe（无需 `.ico`、无需资源编译器） |
 
 ## 代码签名策略（Code signing policy）
 

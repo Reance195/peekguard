@@ -25,7 +25,7 @@ cursor inside the window      350 ms after it left         cursor returns
 
 - **Zero dependencies** — standard library and hand-written Win32 FFI only. Nothing
   from crates.io.
-- **One file** — a ~275 KB exe. No installer. Lives in the tray.
+- **One file** — a ~380 KB exe. No installer. Lives in the tray.
 - **Zero intrusion** — no injection, no subclassing, no global hooks. The target
   process is never touched.
 - **Never leaves a mess** — a crash, a task-manager kill, or an abnormal exit all get
@@ -233,8 +233,8 @@ are combined with **AND**.
 ## Development
 
 ```sh
-cargo build --release      # -> target/release/peekguard.exe (~275 KB, zero deps)
-cargo test                 # 17 unit tests (no side effects, plus 1 #[ignore] diagnostic)
+cargo build --release      # -> target/release/peekguard.exe (~380 KB, zero deps)
+cargo test                 # 22 unit tests (21 run; 1 #[ignore] diagnostic)
 
 # end-to-end (moves the real cursor, needs an interactive desktop)
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_live.py; done         # 23 checks
@@ -275,7 +275,11 @@ can be checked line-by-line against the SDK headers.
 | `src/autostart.rs` | run at login (HKCU Run directly, no subprocess) |
 | `src/session.rs` | crash-recovery journal |
 | `src/tray.rs` | tray icon + menu |
-| `src/icon.rs` | icon generated at runtime (no resource compiler needed) |
+| `src/picker.rs` | crosshair window picker (topmost, click-through overlay) |
+| `src/about.rs` | custom-painted About window |
+| `src/icon.rs` | runtime tray icon (HICON), built from the shared rasteriser |
+| `src/icon_raster.rs` | pure-Rust icon rasteriser (shared by the tray icon and the build) |
+| `build.rs` | embeds the app icon into the exe (no `.ico`, no resource compiler) |
 
 ## Code signing policy
 

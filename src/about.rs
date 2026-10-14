@@ -6,6 +6,9 @@
 //! The window is a fixed-size popup with a standard caption (so it drags and
 //! closes the way windows should) but its client area is drawn by us, which is
 //! what makes it look like part of the app rather than a system alert.
+//!
+//! All sizes below are given at 96 DPI and scaled by the target monitor's DPI
+//! before use, so the window and its text stay legible on high-DPI displays.
 #![allow(non_snake_case)]
 
 use crate::icon;
@@ -17,11 +20,11 @@ const VERSION: &str = "0.1.0";
 const URL: &str = "https://github.com/Reance195/peekguard";
 const URL_LABEL: &str = "github.com/Reance195/peekguard";
 
-const CLIENT_W: i32 = 420;
-const CLIENT_H: i32 = 252;
-
-const PAD: i32 = 24;
-const ICON_PX: i32 = 48;
+// --- base layout, in 96-DPI pixels -----------------------------------------
+const BASE_W: i32 = 520;
+const BASE_H: i32 = 348;
+const PAD: i32 = 28;
+const ICON_PX: i32 = 64;
 
 // colours (COLORREF = 0x00BBGGRR)
 const BG: COLORREF = 0x00FF_FFFF;
@@ -31,8 +34,47 @@ const BODY: COLORREF = 0x0030_3030;
 const LINK: COLORREF = 0x00CC_6600; // RGB(0,102,204)
 const RULE: COLORREF = 0x00E0_E0E0;
 
+const LOGPIXELSY: i32 = 90;
+
 /// The big icon, created once and reused on every repaint.
 static mut ABOUT_ICON: HICON = std::ptr::null_mut();
+
+/// Scale factor from 96 DPI, using a device context. 1.0 if it cannot be read.
+unsafe fn scale_of(dc: *mut c_void) -> f32 {
+    if dc.is_null() {
+        return 1.0;
+    }
+    let dpi = GetDeviceCaps(dc, LOGPIXELSY);
+    if dpi <= 0 {
+        1.0
+    } else {
+        dpi as f32 / 96.0
+    }
+}
+
+/// Scale for the monitor the system would pick for a new window.
+fn screen_scale() -> f32 {
+    unsafe {
+        let dc = GetDC(std::ptr::null_mut());
+        let s = scale_of(dc);
+        ReleaseDC(std::ptr::null_mut(), dc);
+        s
+    }
+}
+
+/// Scale for the monitor a window currently sits on.
+fn window_scale(hwnd: HWND) -> f32 {
+    unsafe {
+        let dc = GetDC(hwnd);
+        let s = scale_of(dc);
+        ReleaseDC(hwnd, dc);
+        s
+    }
+}
+
+fn sc(v: i32, scale: f32) -> i32 {
+    (v as f32 * scale).round() as i32
+}
 
 /// Show the About window, or focus the existing one.
 pub fn show(owner: HWND) {
@@ -41,8 +83,10 @@ pub fn show(owner: HWND) {
         if focus_existing(&class) {
             return;
         }
+        let scale = screen_scale();
         if ABOUT_ICON.is_null() {
-            ABOUT_ICON = icon::create_icon(ICON_PX as usize).unwrap_or_else(icon::stock_icon);
+            let px = sc(ICON_PX, scale).clamp(16, 256) as usize;
+            ABOUT_ICON = icon::create_icon(px).unwrap_or_else(icon::stock_icon);
         }
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSEXW {
@@ -60,8 +104,8 @@ pub fn show(owner: HWND) {
         let mut r = RECT {
             left: 0,
             top: 0,
-            right: CLIENT_W,
-            bottom: CLIENT_H,
+            right: sc(BASE_W, scale),
+            bottom: sc(BASE_H, scale),
         };
         AdjustWindowRect(&mut r, style, 0);
         let w = r.width();
@@ -104,11 +148,11 @@ unsafe fn focus_existing(class: &[u16]) -> bool {
     }
 }
 
-fn make_font(height: i32, weight: i32, underline: u32) -> *mut c_void {
+fn make_font(height: i32, weight: i32, underline: u32, scale: f32) -> *mut c_void {
     let face = to_wide("Segoe UI");
     unsafe {
         CreateFontW(
-            height,
+            sc(height, scale),
             0,
             0,
             0,
@@ -127,14 +171,14 @@ fn make_font(height: i32, weight: i32, underline: u32) -> *mut c_void {
 }
 
 /// Rect of the link text inside the client area, measured for `hdc`.
-unsafe fn link_rect(hdc: *mut c_void) -> RECT {
-    let font = make_font(15, FW_NORMAL, 1);
+unsafe fn link_rect(hdc: *mut c_void, scale: f32) -> RECT {
+    let font = make_font(20, FW_NORMAL, 1, scale);
     let old = SelectObject(hdc, font);
     let mut rc = RECT {
-        left: PAD,
-        top: 206,
-        right: PAD + 400,
-        bottom: 228,
+        left: sc(PAD, scale),
+        top: sc(296, scale),
+        right: sc(PAD + 620, scale),
+        bottom: sc(328, scale),
     };
     let text = to_wide(URL_LABEL);
     DrawTextW(
@@ -170,9 +214,7 @@ fn cursor_over_link(hwnd: HWND, pt: POINT) -> bool {
     unsafe {
         let mut origin = POINT { x: 0, y: 0 };
         ClientToScreen(hwnd, &mut origin);
-        let cx = pt.x - origin.x;
-        let cy = pt.y - origin.y;
-        point_in(link_rect_client(hwnd), cx, cy)
+        point_in(link_rect_client(hwnd), pt.x - origin.x, pt.y - origin.y)
     }
 }
 
@@ -180,7 +222,7 @@ fn cursor_over_link(hwnd: HWND, pt: POINT) -> bool {
 fn link_rect_client(hwnd: HWND) -> RECT {
     unsafe {
         let hdc = GetDC(hwnd);
-        let lr = link_rect(hdc);
+        let lr = link_rect(hdc, window_scale(hwnd));
         ReleaseDC(hwnd, hdc);
         lr
     }
@@ -194,6 +236,7 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
     match msg {
         WM_ERASEBKGND => 1,
         WM_PAINT => {
+            let scale = window_scale(hwnd);
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             let mut rc = RECT::default();
@@ -204,25 +247,27 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
             DeleteObject(bg);
 
             if !ABOUT_ICON.is_null() {
-                DrawIcon(hdc, PAD, PAD, ABOUT_ICON);
+                DrawIcon(hdc, sc(PAD, scale), sc(PAD, scale), ABOUT_ICON);
             }
 
-            let title_f = make_font(22, FW_SEMIBOLD, 0);
-            let ver_f = make_font(13, FW_NORMAL, 0);
-            let body_f = make_font(14, FW_NORMAL, 0);
-            let hint_f = make_font(12, FW_NORMAL, 0);
-            let link_f = make_font(15, FW_NORMAL, 1);
+            let title_f = make_font(30, FW_SEMIBOLD, 0, scale);
+            let ver_f = make_font(18, FW_NORMAL, 0, scale);
+            let body_f = make_font(18, FW_NORMAL, 0, scale);
+            let hint_f = make_font(15, FW_NORMAL, 0, scale);
+            let link_f = make_font(20, FW_NORMAL, 1, scale);
 
-            let ix = PAD + ICON_PX + 12;
+            let pad = sc(PAD, scale);
+            let ix = sc(PAD + ICON_PX + 16, scale);
+
             draw_line(
                 hdc,
                 title_f,
                 TITLE,
                 RECT {
                     left: ix,
-                    top: 24,
-                    right: rc.right - PAD,
-                    bottom: 50,
+                    top: sc(30, scale),
+                    right: rc.right - pad,
+                    bottom: sc(76, scale),
                 },
                 "PeekGuard",
             );
@@ -232,9 +277,9 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
                 MUTED,
                 RECT {
                     left: ix,
-                    top: 52,
-                    right: rc.right - PAD,
-                    bottom: 70,
+                    top: sc(78, scale),
+                    right: rc.right - pad,
+                    bottom: sc(106, scale),
                 },
                 &format!("版本 {VERSION}"),
             );
@@ -243,10 +288,10 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
             FillRect(
                 hdc,
                 &RECT {
-                    left: PAD,
-                    top: 86,
-                    right: rc.right - PAD,
-                    bottom: 87,
+                    left: pad,
+                    top: sc(122, scale),
+                    right: rc.right - pad,
+                    bottom: sc(124, scale),
                 },
                 rule,
             );
@@ -257,10 +302,10 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
                 body_f,
                 BODY,
                 RECT {
-                    left: PAD,
-                    top: 96,
-                    right: rc.right - PAD,
-                    bottom: 116,
+                    left: pad,
+                    top: sc(134, scale),
+                    right: rc.right - pad,
+                    bottom: sc(164, scale),
                 },
                 "绑定任意窗口，鼠标移开自动隐身，移回自动恢复。",
             );
@@ -270,17 +315,17 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
                 ("Ctrl+Alt+H", "立即隐身 / 恢复"),
                 ("Ctrl+Alt+L", "锁存模式"),
             ];
-            let mut y = 126;
+            let mut y = 178;
             for (key, desc) in rows {
                 draw_line(
                     hdc,
                     body_f,
                     BODY,
                     RECT {
-                        left: PAD,
-                        top: y,
-                        right: PAD + 100,
-                        bottom: y + 20,
+                        left: pad,
+                        top: sc(y, scale),
+                        right: sc(PAD + 150, scale),
+                        bottom: sc(y + 30, scale),
                     },
                     key,
                 );
@@ -289,27 +334,27 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
                     body_f,
                     BODY,
                     RECT {
-                        left: PAD + 104,
-                        top: y,
-                        right: rc.right - PAD,
-                        bottom: y + 20,
+                        left: sc(PAD + 160, scale),
+                        top: sc(y, scale),
+                        right: rc.right - pad,
+                        bottom: sc(y + 30, scale),
                     },
                     desc,
                 );
-                y += 24;
+                y += 36;
             }
 
             // link, underlined (the font carries the underline)
-            draw_line(hdc, link_f, LINK, link_rect(hdc), URL_LABEL);
+            draw_line(hdc, link_f, LINK, link_rect(hdc, scale), URL_LABEL);
             draw_line(
                 hdc,
                 hint_f,
                 MUTED,
                 RECT {
-                    left: rc.right - PAD - 168,
-                    top: 230,
-                    right: rc.right - PAD,
-                    bottom: 248,
+                    left: rc.right - pad - sc(190, scale),
+                    top: sc(300, scale),
+                    right: rc.right - pad,
+                    bottom: sc(328, scale),
                 },
                 "Esc 或点关闭按钮退出",
             );

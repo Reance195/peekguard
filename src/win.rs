@@ -392,6 +392,7 @@ unsafe extern "system" {
     pub fn SelectObject(dc: *mut c_void, o: *mut c_void) -> *mut c_void;
     pub fn SetTextColor(dc: *mut c_void, color: COLORREF) -> COLORREF;
     pub fn SetBkMode(dc: *mut c_void, mode: i32) -> i32;
+    pub fn GetDeviceCaps(dc: *mut c_void, index: i32) -> i32;
     pub fn CreateFontW(
         height: i32,
         width: i32,

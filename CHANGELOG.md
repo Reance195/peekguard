@@ -6,10 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Embedded application icon:** the exe now carries a multi-size icon (16–128 px), generated at build time by `build.rs` from the same pure-Rust rasteriser the tray uses — no `.ico` file and no resource compiler. Explorer, the desktop shortcut and the taskbar now show the PeekGuard eye instead of the generic exe icon. (Exe grows to ~380 KB.)
+
 ### Changed
 
+- **About dialog:** Replaced the plain system message box with a custom-painted About window that displays the app icon, version, hotkeys, and a clickable GitHub link. The window now scales with the monitor DPI.
 - **Window picker:** `Ctrl+Alt+P` and the tray "选择窗口并绑定…" item now open a crosshair picker. Move the cursor to highlight the target window's border, left-click to bind it, or right-click/Esc to cancel (no background dimming).
-- **About dialog:** Replaced the plain system message box with a custom-painted About window that displays the app icon, version, hotkeys, and a clickable GitHub link.
 
 ## [0.1.0] — 2026-10-13
 
