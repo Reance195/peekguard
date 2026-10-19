@@ -9,6 +9,7 @@ mod autostart;
 mod config;
 mod hide;
 mod icon;
+mod ipc;
 mod picker;
 mod rules;
 mod session;
@@ -155,6 +156,9 @@ fn main() {
     app().tray = Some(Tray::add(hwnd, hicon, "PeekGuard — 未绑定"));
 
     register_hotkeys(hwnd);
+    // Serve local IPC for scripts and the uTools plugin. Best-effort: if the
+    // pipe cannot be created the tray keeps working with hotkeys alone.
+    ipc::spawn(hwnd);
     unsafe {
         SetTimer(hwnd, 1, TICK_MS, std::ptr::null());
     }
@@ -379,6 +383,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             // Reclaim the box the worker thread posted, then act on it.
             let result = unsafe { *Box::from_raw(l as *mut update::CheckResult) };
             on_update_result(w != 0, result);
+            0
+        }
+        m if m == ipc::WM_IPC_REQUEST => {
+            // A pipe client is waiting; the pipe thread owns the box and
+            // reclaims it once we signal the event inside on_request.
+            unsafe { ipc::on_request(l) };
             0
         }
         WM_CLOSE => {
@@ -954,4 +964,264 @@ fn notify(text: &str) {
 /// All visible top-level windows with a title, used for rule autobind.
 fn top_level_windows() -> Vec<HWND> {
     win::top_level_windows()
+}
+
+// ---------------------------------------------------------------- ipc (uTools & scripts)
+
+/// Execute one command arriving over the named pipe (see `ipc.rs`) and return
+/// a single-line JSON response. Runs on the UI thread, where all state lives.
+///
+/// Commands: `status`, `hide`, `show`, `toggle`, `bind`, `unbind`,
+/// `latch on|off|toggle`, `mode alpha|move|hide`, `scan on|off|toggle`,
+/// `reload`, `autostart on|off|toggle`. There is deliberately no `quit`.
+pub(crate) fn ipc_command(line: &str) -> String {
+    let mut parts = line.split_whitespace();
+    let verb = parts.next().unwrap_or("").to_ascii_lowercase();
+    let arg = parts.next().unwrap_or("").to_ascii_lowercase();
+    match verb.as_str() {
+        "status" | "ping" => ipc_ok(""),
+        "hide" => ipc_act(force_hide()),
+        "show" => ipc_act(force_show()),
+        "toggle" => {
+            if app().watcher.hidden.is_some() {
+                ipc_act(force_show())
+            } else {
+                ipc_act(force_hide())
+            }
+        }
+        "bind" => {
+            if app().picker.is_some() {
+                return ipc_ok("窗口选择器已经打开");
+            }
+            open_picker();
+            if app().picker.is_some() {
+                ipc_ok("窗口选择器已打开：把光标移到目标窗口上点击即可")
+            } else {
+                ipc_err("无法打开窗口选择器")
+            }
+        }
+        "unbind" => {
+            if app().watcher.target.is_none() {
+                ipc_ok("当前没有绑定窗口")
+            } else {
+                unbind_all();
+                ipc_ok("已解绑并恢复显示")
+            }
+        }
+        "latch" => {
+            let a = app();
+            match parse_toggle_arg(&arg, a.watcher.cfg.latch) {
+                Ok(want) if a.watcher.cfg.latch == want => ipc_ok(if want {
+                    "锁存模式已经开启"
+                } else {
+                    "锁存模式已经关闭"
+                }),
+                Ok(want) => {
+                    toggle_latch();
+                    ipc_ok(if want {
+                        "锁存模式已开启"
+                    } else {
+                        "锁存模式已关闭"
+                    })
+                }
+                Err(e) => ipc_err(&e),
+            }
+        }
+        "mode" => match HideMode::parse(&arg) {
+            Some(m) if app().watcher.cfg.mode == m => {
+                ipc_ok(&format!("隐身方式已经是 {}", tray::mode_name(m)))
+            }
+            Some(m) => {
+                set_mode(m);
+                // set_mode refuses on windows that reject outside style edits.
+                if app().watcher.cfg.mode == m {
+                    ipc_ok(&format!("隐身方式已切换为 {}", tray::mode_name(m)))
+                } else {
+                    ipc_err("这个窗口不接受外部样式修改（可能以管理员身份运行）")
+                }
+            }
+            None => ipc_err("用法: mode alpha|move|hide"),
+        },
+        "scan" => {
+            let a = app();
+            let enabled = !a.scanner.muted();
+            match parse_toggle_arg(&arg, enabled) {
+                Ok(want) if enabled == want => ipc_ok(if want {
+                    "规则自动保护已经开启"
+                } else {
+                    "规则自动保护已经暂停"
+                }),
+                Ok(want) => {
+                    toggle_scan();
+                    ipc_ok(if want {
+                        "规则自动保护已开启"
+                    } else {
+                        "规则自动保护已暂停"
+                    })
+                }
+                Err(e) => ipc_err(&e),
+            }
+        }
+        "reload" => {
+            reload_config();
+            ipc_ok("配置已重载")
+        }
+        "autostart" => {
+            let current = autostart::enabled();
+            match parse_toggle_arg(&arg, current) {
+                Ok(want) if current == want => ipc_ok(if want {
+                    "开机自启已经开启"
+                } else {
+                    "开机自启已经关闭"
+                }),
+                Ok(want) => {
+                    toggle_autostart();
+                    if autostart::enabled() == want {
+                        ipc_ok(if want {
+                            "已设置开机自动启动"
+                        } else {
+                            "已取消开机自动启动"
+                        })
+                    } else {
+                        ipc_err("设置开机自启失败")
+                    }
+                }
+                Err(e) => ipc_err(&e),
+            }
+        }
+        "" => ipc_err("空命令"),
+        other => ipc_err(&format!("未知命令: {other}")),
+    }
+}
+
+/// Hide the bound window right now. Same behavior as the hotkey path, but the
+/// outcome is returned instead of ballooned — the IPC layer decides how to
+/// surface it (and reuses it for the balloon text).
+fn force_hide() -> Result<String, String> {
+    let a = app();
+    if a.watcher.target.is_none() {
+        return Err("先绑定一个窗口（Ctrl+Alt+P）".to_string());
+    }
+    if a.watcher.hidden.is_some() {
+        return Ok("窗口已经处于隐身状态".to_string());
+    }
+    if a.watcher.hide_now() {
+        session::write(&a.watcher.hidden.iter().cloned().collect::<Vec<_>>());
+        update_tray();
+        Ok("已隐身".to_string())
+    } else {
+        session::write(&a.watcher.hidden.iter().cloned().collect::<Vec<_>>());
+        update_tray();
+        let elevated = a
+            .watcher
+            .target
+            .as_ref()
+            .map(|t| hide::owner_elevated(t.hwnd))
+            .unwrap_or(false);
+        Err(if elevated {
+            "无法操作该窗口：它可能以管理员身份运行，请也用管理员身份启动 PeekGuard".to_string()
+        } else {
+            "隐藏失败，试试换一种隐身方式".to_string()
+        })
+    }
+}
+
+/// Bring the bound window back, if it is hidden.
+fn force_show() -> Result<String, String> {
+    let a = app();
+    if a.watcher.target.is_none() {
+        return Err("先绑定一个窗口（Ctrl+Alt+P）".to_string());
+    }
+    if a.watcher.hidden.is_none() {
+        return Ok("窗口当前可见".to_string());
+    }
+    a.watcher.restore();
+    session::write(&[]);
+    update_tray();
+    Ok("已恢复显示".to_string())
+}
+
+/// Parse `on` / `off` / `toggle` (empty means toggle). `current` is the state
+/// a bare `toggle` flips.
+fn parse_toggle_arg(arg: &str, current: bool) -> Result<bool, String> {
+    match arg {
+        "" | "toggle" => Ok(!current),
+        "on" | "true" | "1" => Ok(true),
+        "off" | "false" | "0" => Ok(false),
+        other => Err(format!("无法识别的参数 \"{other}\"（可用 on|off|toggle）")),
+    }
+}
+
+/// Command with a user-facing outcome: balloon the message (a panel click or
+/// a quick command may be the only visible feedback) and echo it in the JSON.
+fn ipc_act(outcome: Result<String, String>) -> String {
+    match outcome {
+        Ok(msg) => {
+            notify(&format!("{msg}。"));
+            ipc_ok(&msg)
+        }
+        Err(msg) => {
+            notify(&format!("{msg}。"));
+            ipc_err(&msg)
+        }
+    }
+}
+
+fn ipc_ok(msg: &str) -> String {
+    format!(
+        r#"{{"ok":true,"msg":"{}","state":{}}}"#,
+        ipc::escape_json(msg),
+        ipc_state_json()
+    )
+}
+
+fn ipc_err(msg: &str) -> String {
+    format!(
+        r#"{{"ok":false,"err":"{}","state":{}}}"#,
+        ipc::escape_json(msg),
+        ipc_state_json()
+    )
+}
+
+/// Snapshot of everything a panel or script wants to know. Machine-readable
+/// names (`state` is english, numbers stay numbers); the plugin maps them to
+/// labels.
+fn ipc_state_json() -> String {
+    let a = app();
+    let (bound, desc, proc) = match &a.watcher.target {
+        Some(t) => (true, t.describe(), t.process.clone()),
+        None => (false, String::new(), String::new()),
+    };
+    format!(
+        concat!(
+            r#"{{"version":"{}","bound":{},"bound_desc":"{}","bound_process":"{}","#,
+            r#""state":"{}","hidden":{},"mode":"{}","latch":{},"delay_ms":{},"rules":{},"#,
+            r#""scan":{},"picking":{},"elevated":{},"autostart":{},"config":"{}"}}"#,
+        ),
+        update::VERSION,
+        bound,
+        ipc::escape_json(&desc),
+        ipc::escape_json(&proc),
+        watcher_state_name(a.watcher.state),
+        a.watcher.hidden.is_some(),
+        a.watcher.cfg.mode.as_str(),
+        a.watcher.cfg.latch,
+        a.watcher.cfg.delay_ms,
+        a.watcher.cfg.rules.len(),
+        !a.scanner.muted(),
+        a.picker.is_some(),
+        is_elevated(),
+        autostart::enabled(),
+        ipc::escape_json(&Config::config_path().to_string_lossy()),
+    )
+}
+
+fn watcher_state_name(state: State) -> &'static str {
+    match state {
+        State::Idle => "idle",
+        State::Armed => "armed",
+        State::Pending { .. } => "pending",
+        State::Hidden => "hidden",
+        State::Latched => "latched",
+    }
 }

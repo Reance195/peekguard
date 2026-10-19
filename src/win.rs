@@ -98,6 +98,22 @@ pub const KEY_QUERY_VALUE: u32 = 0x0001;
 pub const KEY_SET_VALUE: u32 = 0x0002;
 pub const REG_SZ: u32 = 1;
 
+// ---- named pipes (IPC for the uTools plugin and scripts)
+/// Client opens and server serves both directions on one handle.
+pub const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+/// `PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT` — all zero, spelled out so
+/// the call site reads like the SDK.
+pub const PIPE_TYPE_BYTE: u32 = 0x0;
+pub const PIPE_READMODE_BYTE: u32 = 0x0;
+pub const PIPE_WAIT: u32 = 0x0;
+/// `ConnectNamedPipe` reports this as an error when the client attached between
+/// `CreateNamedPipeW` and the call; it means "connected", not "failed".
+pub const ERROR_PIPE_CONNECTED: u32 = 535;
+/// `WaitForSingleObject` return values we care about.
+pub const WAIT_OBJECT_0: u32 = 0;
+pub const WAIT_TIMEOUT: u32 = 258;
+pub const INVALID_HANDLE_VALUE: HANDLE = -1isize as HANDLE;
+
 // ---- update check (WinHTTP). The only network code in PeekGuard.
 pub const WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY: u32 = 4;
 pub const WINHTTP_FLAG_SECURE: u32 = 0x0080_0000;
@@ -394,6 +410,42 @@ unsafe extern "system" {
     pub fn CreateMutexW(attr: *const c_void, owner: BOOL, name: *const u16) -> HANDLE;
     pub fn GetTickCount64() -> u64;
     pub fn Sleep(ms: u32);
+    #[allow(clippy::too_many_arguments)]
+    pub fn CreateNamedPipeW(
+        name: *const u16,
+        open_mode: u32,
+        pipe_mode: u32,
+        max_instances: u32,
+        out_buffer: u32,
+        in_buffer: u32,
+        timeout: u32,
+        security: *const c_void,
+    ) -> HANDLE;
+    pub fn ConnectNamedPipe(h: HANDLE, overlapped: *mut c_void) -> BOOL;
+    pub fn DisconnectNamedPipe(h: HANDLE) -> BOOL;
+    pub fn ReadFile(
+        h: HANDLE,
+        buf: *mut c_void,
+        to_read: u32,
+        read: *mut u32,
+        overlapped: *mut c_void,
+    ) -> BOOL;
+    pub fn WriteFile(
+        h: HANDLE,
+        buf: *const c_void,
+        to_write: u32,
+        wrote: *mut u32,
+        overlapped: *mut c_void,
+    ) -> BOOL;
+    pub fn FlushFileBuffers(h: HANDLE) -> BOOL;
+    pub fn CreateEventW(
+        attr: *const c_void,
+        manual_reset: BOOL,
+        initial: BOOL,
+        name: *const u16,
+    ) -> HANDLE;
+    pub fn SetEvent(h: HANDLE) -> BOOL;
+    pub fn WaitForSingleObject(h: HANDLE, ms: u32) -> u32;
 }
 
 #[link(name = "gdi32")]

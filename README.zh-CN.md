@@ -196,6 +196,28 @@ PeekGuard 可以告诉你有没有新版本。启动时会向公开的 GitHub Re
 网络代码，位于 `src/update.rs`，用 WinHTTP 手写（不引入 crate）；`src/win.rs` 依然是它导入
 的全部 Win32 API 清单。
 
+## uTools 插件（可选）
+
+[`utools-plugin/`](utools-plugin/) 是一个配套的 [uTools](https://www.u-tools.cn/) 插件，
+把常用操作搬进 uTools 的搜索框，不用再翻托盘菜单。
+
+安装：uTools →「插件应用市场」里搜 `PeekGuard`（若尚未上架，可用「开发者工具 → 新建项目」
+直接加载本仓库的 `utools-plugin/` 目录；插件无构建步骤，加载即用）。
+
+用法：
+
+- 输入 `防窥`（或 `peekguard`）回车 → 打开控制面板：连接状态、绑定信息、一键隐身/恢复、
+  锁存与规则开关、隐身方式切换，都在这一个页面里
+- 输入 `隐身` → 立即隐身/恢复被保护的窗口（不留窗口，执行完自动收起）
+- 输入 `绑定窗口` → 打开 PeekGuard 的十字光标选择器，移到目标窗口上点击即可
+
+PeekGuard 没在运行时，插件会探测常见安装位置并一键启动；找不到时可在面板里手动指定
+`peekguard.exe` 路径（会被记住）。
+
+插件与 PeekGuard 之间是**本地命名管道**（`\\.\pipe\PeekGuard-IPC-v1`）：一行文本命令、
+一行 JSON 响应，任何脚本都能用。协议表和命令行工具见
+[`utools-plugin/README.md`](utools-plugin/README.md)，快速自测：`node utools-plugin/test-cli.js`。
+
 ## 已知限制
 
 | 情况 | 表现 | 说明 |
@@ -217,6 +239,9 @@ PeekGuard 可以告诉你有没有新版本。启动时会向公开的 GitHub Re
   见 [`docs/superpowers/specs`](docs/superpowers/specs/2026-10-10-peekguard-design.md)）
 - **程序自己崩了也会还原**：装了 panic hook，即使 `panic = "abort"` 也保证在进程死前
   把窗口放回去（这一条有专门的端到端测试 `tests/e2e_panic.py` 验证）
+- **IPC 只听本机、只认当前用户**：uTools 插件用的命名管道不监听任何网络端口，默认安全
+  描述符只允许启动 PeekGuard 的用户（及管理员）连接；命令集是固定白名单，**没有退出、
+  下载、任意执行**这类操作
 
 ## 开发
 
@@ -230,11 +255,12 @@ for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_latch.py; done  
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_rules.py; done        # 16 项
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_robustness.py; done   # 16 项
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_panic.py; done        # 10 项
+python tests/e2e_ipc.py                                                               # 40 项（命名管道 IPC）
 ```
 
-合计 240 项端到端检查全绿（三个隐身模式各跑一遍）。每份测试都自己取一个独立的 `PEEKGUARD_MUTEX`
+合计 280 项端到端检查全绿（三个隐身模式各跑一遍）。每份测试都自己取一个独立的 `PEEKGUARD_MUTEX`
 单实例名，所以不会和你正在跑的 PeekGuard 抢互斥；测试用的规则同时限定
-`class:` 和 `title:`，只命中测试自己的窗口。
+`class:` 和 `title:`，只命中测试自己的窗口。IPC 测试同样有自己独立的管道名和配置文件。
 
 `PEEKGUARD_MODE=alpha|move|hide` 切换端到端测试的隐身方式，
 `PEEKGUARD_DEBUG=1` 输出详细日志到 stderr 和 `%APPDATA%\PeekGuard\debug.log`。
@@ -256,6 +282,7 @@ SDK 头文件逐行对得上，改名反而更难核对。
 | `src/hide.rs` | 隐身原语 + 状态快照 / 无损还原 |
 | `src/watch.rs` | 状态机：鼠标轮询、延迟防抖、锁存 |
 | `src/rules.rs` | 常驻规则扫描：限速轮询、挑选目标、逐窗口抑制 |
+| `src/ipc.rs` | 命名管道 IPC 服务（uTools 插件与脚本的接口） |
 | `src/config.rs` | 配置解析 + 规则匹配 |
 | `src/autostart.rs` | 开机自启（直接读写 HKCU Run，无子进程） |
 | `src/session.rs` | 崩溃恢复日志 |
@@ -265,6 +292,9 @@ SDK 头文件逐行对得上，改名反而更难核对。
 | `src/icon.rs` | 运行时托盘图标（HICON），复用同一套渲染器 |
 | `src/icon_raster.rs` | 纯 Rust 图标渲染器 |
 | `build.rs` | 把应用图标嵌入 exe（无需 `.ico`、无需资源编译器） |
+
+`utools-plugin/` 是配套的 uTools 插件（纯 HTML/CSS/JS + preload，无构建步骤、无打包）；
+`tools/make-logo.ps1` 用同一套「眼睛」视觉生成插件图标。
 
 ## 代码签名策略（Code signing policy）
 

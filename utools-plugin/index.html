@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PeekGuard</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <img class="logo" src="logo.png" alt="" />
+        <div class="titles">
+          <h1>PeekGuard 防窥守卫</h1>
+          <p id="conn" class="conn">正在连接…</p>
+        </div>
+        <span id="badge" class="badge">…</span>
+      </header>
+
+      <section id="offline" class="card hidden">
+        <p id="offline-msg">PeekGuard 没有在运行。</p>
+        <p id="exe-path" class="hint"></p>
+        <div class="row">
+          <button id="btn-launch" class="btn primary" disabled>启动 PeekGuard</button>
+          <button id="btn-choose" class="btn">手动指定程序…</button>
+          <button id="btn-retry" class="btn subtle">重新检测</button>
+        </div>
+        <p class="hint">
+          提示：把 peekguard.exe 放到“下载/桌面/插件目录”，或设 PEEKGUARD_EXE 环境变量，都能被自动找到。
+        </p>
+      </section>
+
+      <section id="panel" class="card hidden">
+        <div class="status">
+          <div class="status-main">
+            <span id="state-label" class="state">未绑定</span>
+            <span id="target" class="target">没有绑定任何窗口</span>
+          </div>
+          <span id="admin-chip" class="chip hidden">管理员模式</span>
+        </div>
+
+        <div class="row">
+          <button id="btn-toggle" class="btn primary big">立即隐身</button>
+          <button id="btn-bind" class="btn">绑定窗口</button>
+          <button id="btn-unbind" class="btn">解绑</button>
+        </div>
+
+        <div class="row switches">
+          <label class="switch">
+            <input id="sw-latch" type="checkbox" />
+            <span>锁存模式</span>
+          </label>
+          <label class="switch">
+            <input id="sw-scan" type="checkbox" />
+            <span>规则保护</span>
+          </label>
+          <label class="switch">
+            <input id="sw-autostart" type="checkbox" />
+            <span>开机自启</span>
+          </label>
+          <button id="btn-reload" class="btn subtle">重载配置</button>
+        </div>
+
+        <div class="seg" id="mode" role="group" aria-label="隐身方式">
+          <button data-mode="alpha">透明</button>
+          <button data-mode="move">移出屏幕</button>
+          <button data-mode="hide">隐藏窗口</button>
+        </div>
+
+        <p class="hint">
+          快捷键：Ctrl+Alt+P 绑定 · Ctrl+Alt+H 隐身/恢复 · Ctrl+Alt+L 锁存
+        </p>
+      </section>
+
+      <footer class="foot">
+        <span id="meta" class="meta" title=""></span>
+        <button id="btn-out" class="link">关闭</button>
+      </footer>
+
+      <div id="toast" class="toast" role="status"></div>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

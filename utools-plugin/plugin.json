@@ -1,0 +1,34 @@
+{
+  "main": "index.html",
+  "logo": "logo.png",
+  "preload": "preload.js",
+  "pluginSetting": {
+    "single": true,
+    "height": 560
+  },
+  "features": [
+    {
+      "code": "panel",
+      "description": "打开 PeekGuard 控制面板",
+      "icon": "logo.png",
+      "platform": ["win32"],
+      "cmds": ["peekguard", "防窥", "防窥守卫", "peek"]
+    },
+    {
+      "code": "quick-toggle",
+      "description": "立即隐身 / 恢复被保护的窗口",
+      "icon": "logo.png",
+      "platform": ["win32"],
+      "mainHide": true,
+      "cmds": ["隐身", "隐身切换", "hide"]
+    },
+    {
+      "code": "quick-bind",
+      "description": "绑定要保护的窗口（十字光标选择）",
+      "icon": "logo.png",
+      "platform": ["win32"],
+      "mainHide": true,
+      "cmds": ["绑定窗口", "保护窗口", "bind"]
+    }
+  ]
+}

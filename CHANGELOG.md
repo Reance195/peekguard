@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **uTools plugin:** [`utools-plugin/`](utools-plugin/) is a companion plugin that drives
+  PeekGuard from uTools' search bar — a control panel (`防窥`), one-shot hide/restore
+  (`隐身`) and a window-bind shortcut (`绑定窗口`). It remembers a manually chosen
+  `peekguard.exe` path and can launch PeekGuard when it is not running. Plain
+  HTML/CSS/JS + preload; no build step.
+- **Named-pipe IPC:** PeekGuard now serves a local named pipe
+  (`\\.\pipe\PeekGuard-IPC-v1`) so scripts (and the plugin) can read a state snapshot
+  and drive the usual actions — hide/show/toggle, bind/unbind, latch, mode, scan,
+  reload, autostart — with one text line in and one JSON line out. No network port is
+  opened, and the default pipe ACL admits only the user who started PeekGuard. Hand
+  written in `src/ipc.rs`; the zero-dependency promise holds. Covered by
+  `tests/e2e_ipc.py` (40 checks) and `utools-plugin/test-cli.js` (18 checks).
 - **Startup notification:** PeekGuard now shows a tray balloon when it starts, so a
   windowless run is no longer silent. Any crash-recovery count and config note are
   folded into the same balloon.

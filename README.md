@@ -224,6 +224,33 @@ data, no telemetry. It is the only network code in the program, and it is writte
 hand against WinHTTP in `src/update.rs` (no crate); the rest of `src/win.rs` remains
 the complete list of Win32 APIs the program imports.
 
+## uTools plugin (optional)
+
+[`utools-plugin/`](utools-plugin/) is a companion [uTools](https://www.u-tools.cn/)
+plugin that moves the usual actions into uTools' search bar, so you never have to hunt
+for the tray icon.
+
+Install: in uTools, search the plugin marketplace for `PeekGuard`; alternatively load
+the `utools-plugin/` folder directly from uTools → Developer Tools → create project
+(there is no build step — what is in the folder is what runs).
+
+Usage:
+
+- Type `防窥` (or `peekguard`) → opens the control panel: connection status, the bound
+  window, one-click hide/restore, latch and rules toggles, and the hide-strategy switch
+- Type `隐身` → hide/restore the protected window immediately (no window is shown; the
+  plugin dismisses itself when done)
+- Type `绑定窗口` → opens PeekGuard's crosshair picker; click a window to bind it
+
+If PeekGuard is not running, the plugin probes the usual install locations and can
+launch it; if that fails, pick `peekguard.exe` manually in the panel (the path is
+remembered).
+
+The plugin talks to PeekGuard over a **local named pipe** (`\\.\pipe\PeekGuard-IPC-v1`):
+one text line in, one JSON line out — any script can do the same. See
+[`utools-plugin/README.md`](utools-plugin/README.md) for the protocol table, or try
+`node utools-plugin/test-cli.js`.
+
 ## Known limitations
 
 | Situation | Behaviour | Notes |
@@ -254,6 +281,10 @@ the complete list of Win32 APIs the program imports.
 - **Even a panic restores your windows.** A panic hook runs even under `panic = "abort"`,
   so the windows go back before the process dies — verified end-to-end by
   `tests/e2e_panic.py`.
+- **The IPC listens on the local machine only, and only for you.** The named pipe behind
+  the uTools plugin opens no network port, and its default security descriptor admits
+  only the user who started PeekGuard (and administrators). The command set is a fixed
+  allowlist — no quit, no download, no arbitrary execution.
 
 ## Development
 
@@ -267,12 +298,14 @@ for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_latch.py; done  
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_rules.py; done        # 16 checks
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_robustness.py; done   # 16 checks
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_panic.py; done        # 10 checks
+python tests/e2e_ipc.py                                                               # 40 checks (named-pipe IPC)
 ```
 
-240 end-to-end checks in total, all green (each strategy is certified separately). Every
-suite names its own `PEEKGUARD_MUTEX` single-instance name, so it never fights the
+280 end-to-end checks in total, all green (each hide strategy is certified separately).
+Every suite names its own `PEEKGUARD_MUTEX` single-instance name, so it never fights the
 PeekGuard you already have running; the rules under test pin both `class:` and `title:`
-so they only ever match the suite's own window.
+so they only ever match the suite's own window. The IPC suite likewise uses its own pipe
+name and config file.
 
 `PEEKGUARD_MODE=alpha|move|hide` selects which hide strategy a suite certifies.
 `PEEKGUARD_DEBUG=1` turns on verbose logging to stderr and
@@ -296,6 +329,7 @@ can be checked line-by-line against the SDK headers.
 | `src/hide.rs` | hide primitives + state snapshot / lossless restore |
 | `src/watch.rs` | state machine: cursor polling, debounce, latch |
 | `src/rules.rs` | standing-rule scanner: rate limiting, target picking, per-window suppression |
+| `src/ipc.rs` | named-pipe IPC server (the uTools plugin / scripting interface) |
 | `src/config.rs` | config parsing + rule matching |
 | `src/autostart.rs` | run at login (HKCU Run directly, no subprocess) |
 | `src/session.rs` | crash-recovery journal |
@@ -305,6 +339,10 @@ can be checked line-by-line against the SDK headers.
 | `src/icon.rs` | runtime tray icon (HICON), built from the shared rasteriser |
 | `src/icon_raster.rs` | pure-Rust icon rasteriser (shared by the tray icon and the build) |
 | `build.rs` | embeds the app icon into the exe (no `.ico`, no resource compiler) |
+
+`utools-plugin/` is the companion uTools plugin (plain HTML/CSS/JS plus a preload
+script; no build step, no bundler); `tools/make-logo.ps1` renders its icon from the
+same "eye" design the tray uses.
 
 ## Code signing policy
 
