@@ -1,20 +1,32 @@
 #!/usr/bin/env node
-// 命令行测试工具：不依赖 uTools，直接通过命名管道把 PeekGuard 的 IPC 命令打一遍。
+// 命令行测试工具：不依赖 uTools，直接通过本机 IPC 把 PeekGuard 的命令打一遍
+// （Windows 走命名管道，Linux/macOS 走 Unix 域套接字）。
 //
 //   node test-cli.js                跑内置全套用例（只做可复原的操作）
 //   node test-cli.js status         发一条命令，打印原始 JSON 响应
 //   node test-cli.js latch on       带参数的命令照写
 //
-// 环境变量 PEEKGUARD_PIPE 可指向隔离的测试实例（与 PeekGuard 的 ipc.rs 一致）。
+// 环境变量 PEEKGUARD_PIPE 可指向隔离的测试实例（与 PeekGuard 的 ipc 实现一致）：
+// Windows 下写裸名（自动加 \\.\pipe\ 前缀）；Unix 下以 / 开头视为绝对路径，
+// 否则放入运行时目录（$XDG_RUNTIME_DIR，缺省 /tmp）。
 // 注意：hide/show/toggle/bind 等命令会真实作用于正在运行的 PeekGuard。
 
 const net = require('net');
+const path = require('path');
+
+const IS_WINDOWS = process.platform === 'win32';
 
 function pipePath() {
   const raw = process.env.PEEKGUARD_PIPE;
-  if (!raw || !raw.trim()) return '\\\\.\\pipe\\PeekGuard-IPC-v1';
-  const name = raw.trim();
-  return name.startsWith('\\\\.\\pipe\\') ? name : '\\\\.\\pipe\\' + name;
+  const name = raw && raw.trim();
+  if (IS_WINDOWS) {
+    if (!name) return '\\\\.\\pipe\\PeekGuard-IPC-v1';
+    return name.startsWith('\\\\.\\pipe\\') ? name : '\\\\.\\pipe\\' + name;
+  }
+  const runtime = (process.env.XDG_RUNTIME_DIR || '').trim() || '/tmp';
+  if (!name) return path.join(runtime, 'peekguard-ipc.sock');
+  if (name.startsWith('/')) return name;
+  return path.join(runtime, name + '.sock');
 }
 
 function send(command, timeoutMs = 5000) {
@@ -42,7 +54,7 @@ function send(command, timeoutMs = 5000) {
       }
     });
     socket.on('error', () =>
-      finish({ ok: false, offline: true, err: 'PeekGuard 未运行（管道不存在）' })
+      finish({ ok: false, offline: true, err: 'PeekGuard 未运行（IPC 不可达）' })
     );
     socket.on('timeout', () => finish({ ok: false, err: '响应超时' }));
     socket.on('close', () => finish({ ok: false, offline: true, err: '连接已关闭' }));

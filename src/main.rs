@@ -1,37 +1,66 @@
 //! PeekGuard — bind any window, hide it when the mouse leaves, restore on return.
 //!
-//! Zero dependencies. Single-binary Windows tool.
+//! Zero dependencies. Single binary: Windows (Win32) and Linux (X11).
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+// Windows-only subsystems. The Linux equivalents live in `x11/` and reach the
+// shared code through the `plat` adapter.
+#[cfg(windows)]
 mod about;
+#[cfg(windows)]
 mod autostart;
 mod config;
+#[cfg(windows)]
 mod hide;
+#[cfg(windows)]
 mod icon;
+#[cfg(windows)]
 mod ipc;
+#[cfg(windows)]
 mod picker;
+mod plat;
 mod rules;
 mod session;
+#[cfg(windows)]
 mod tray;
 mod update;
 mod watch;
+#[cfg(windows)]
 mod win;
 
+#[cfg(target_os = "linux")]
+mod x11;
+
 use config::{Config, HideMode, Rule};
+#[cfg(windows)]
 use tray::*;
 use watch::{State, Watcher};
+#[cfg(windows)]
 use win::*;
+#[cfg(target_os = "linux")]
+use x11::*;
 
+// Both platform flavors answer to the same name for the JSON helpers; on
+// Windows `ipc` is the module declared above, here it aliases the x11 one. The
+// transport behind it (named pipe vs unix socket) is what differs.
+#[cfg(target_os = "linux")]
+use crate::x11::ipc;
+
+#[cfg(windows)]
 const CLASS_NAME: &str = "PeekGuard.MessageWindow.v1";
 const TICK_MS: u32 = 16; // 62 Hz cursor polling: invisible CPU cost, no felt lag
 
+#[cfg(windows)]
 const HOTKEY_BIND: i32 = 1;
+#[cfg(windows)]
 const HOTKEY_TOGGLE: i32 = 2;
+#[cfg(windows)]
 const HOTKEY_LATCH: i32 = 3;
 
 /// Posted by the background update-check thread. `wParam` = manual (non-zero when
 /// the user asked), `lParam` = a `Box<update::CheckResult>` as a raw pointer.
+#[cfg(windows)]
 const WM_UPDATE_RESULT: u32 = WM_APP + 2;
 
 /// Global app state, owned by the message loop and reached from the window proc.
@@ -39,10 +68,13 @@ struct App {
     watcher: Watcher,
     /// Finds rule-matched windows and hands them to the watcher.
     scanner: rules::Scanner,
+    /// Tray icon. Windows only; the Linux build has no tray.
+    #[cfg(windows)]
     tray: Option<Tray>,
+    /// Message window (Windows). Zero on Linux, where there is no window.
     hwnd: HWND,
     /// Crosshair window picker, while the user is choosing a window to bind.
-    picker: Option<picker::Picker>,
+    picker: Option<plat::picker::Picker>,
     /// A newer release the last check found, if any.
     update_available: Option<update::UpdateInfo>,
     /// A background update check is in flight; don't start a second one.
@@ -56,7 +88,7 @@ fn app() -> &'static mut App {
 }
 
 /// Diagnostic log. Enable with PEEKGUARD_DEBUG=1; writes to stderr and to
-/// %APPDATA%\PeekGuard\debug.log so a GUI build can be troubleshot too.
+/// `debug.log` in the config dir so a GUI build can be troubleshot too.
 pub fn dbg_log(args: std::fmt::Arguments) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let on = *ENABLED.get_or_init(|| {
@@ -93,6 +125,15 @@ macro_rules! dbgmsg {
 }
 
 fn main() {
+    #[cfg(windows)]
+    run_windows();
+    #[cfg(target_os = "linux")]
+    run_linux();
+}
+
+/// Windows entry point: message window, tray icon, hotkeys, message loop.
+#[cfg(windows)]
+fn run_windows() {
     unsafe {
         SetProcessDPIAware();
     }
@@ -199,6 +240,128 @@ fn main() {
     message_loop();
 }
 
+/// Linux entry point: no window, no tray. The tool is driven by the global
+/// hotkeys and by IPC (scripts, the uTools plugin), and reports through
+/// desktop notifications.
+#[cfg(target_os = "linux")]
+fn run_linux() {
+    // The X connection must come up before anything else: every helper in
+    // `x11` talks through the display handle.
+    if let Err(e) = x11::connect() {
+        eprintln!("[peekguard] {e}");
+        std::process::exit(1);
+    }
+
+    // If we panic, the first thing that must happen is putting any hidden
+    // window back (same contract as Windows; see `run_windows`).
+    install_panic_guard();
+
+    // Single instance: a second copy would fight over the same windows.
+    // `PEEKGUARD_MUTEX` lets the end-to-end suites name their own lock file
+    // and get a genuinely independent instance.
+    let _lock = match x11::acquire_single_instance() {
+        Ok(lock) => lock,
+        Err(e) => {
+            if std::env::var("PEEKGUARD_MUTEX").is_err() {
+                notify(&e);
+            }
+            return;
+        }
+    };
+
+    let recovered = session::replay();
+    let (cfg, note) = Config::load();
+
+    let mut state = App {
+        watcher: Watcher::new(cfg),
+        scanner: rules::Scanner::new(),
+        hwnd: 0,
+        picker: None,
+        update_available: None,
+        update_checking: false,
+    };
+    unsafe {
+        APP = &mut state;
+    }
+
+    // Serve local IPC for scripts and the uTools plugin. Best-effort: a
+    // failure to bind the socket leaves hotkeys working on their own.
+    ipc::start();
+    x11::install_signal_handlers();
+
+    maybe_arm_test_panic();
+
+    apply_autobind();
+    update_tray();
+    scan_rules();
+
+    // Announce the launch (notification; there is no tray). Skipped under
+    // PEEKGUARD_MUTEX (the end-to-end suites) where it would just be noise.
+    if std::env::var("PEEKGUARD_MUTEX").is_err() {
+        let mut msg = String::from("PeekGuard 已启动，正在后台运行。");
+        if recovered > 0 {
+            msg.push_str(&format!("已恢复上次异常退出时隐藏的 {recovered} 个窗口。"));
+        }
+        if let Some(n) = note {
+            if !n.is_empty() {
+                msg.push(' ');
+                msg.push_str(&n);
+            }
+        }
+        notify(&msg);
+    }
+
+    // Look for a newer release once at startup (opt-out via `check_update`).
+    // Skipped under PEEKGUARD_MUTEX so the suites stay offline and
+    // deterministic.
+    if app().watcher.cfg.check_update && std::env::var("PEEKGUARD_MUTEX").is_err() {
+        start_update_check(false);
+    }
+
+    main_loop();
+}
+
+/// The Linux main loop: a fixed 16 ms tick plus three polled inputs -- IPC
+/// requests, global hotkeys (XQueryKeymap) and the pointer (via `on_tick`).
+/// There is no X event loop by design: every input is queried, none pushed.
+#[cfg(target_os = "linux")]
+fn main_loop() {
+    let mut hotkeys = x11::Hotkeys::new();
+    let mut next = x11::tick_ms();
+    loop {
+        // Serve waiting IPC clients first: a script or the plugin should
+        // never wait a full tick for an answer.
+        ipc::drain(ipc_command);
+        poll_update_result();
+
+        match hotkeys.poll() {
+            Some(x11::Hotkey::Bind) => toggle_bind(),
+            Some(x11::Hotkey::Toggle) => toggle_hide(),
+            Some(x11::Hotkey::Latch) => toggle_latch(),
+            None => {}
+        }
+
+        on_tick();
+
+        let sig = x11::pending_signal();
+        if sig != 0 {
+            dbgmsg!("signal {} received, shutting down", sig);
+            shutdown();
+            return;
+        }
+
+        // Fixed cadence with drift correction. Falling behind (a slow tick,
+        // a burst of IPC) resyncs instead of bursting to catch up.
+        next += TICK_MS as u64;
+        let now = x11::tick_ms();
+        if next > now {
+            std::thread::sleep(std::time::Duration::from_millis(next - now));
+        } else {
+            next = now + TICK_MS as u64;
+        }
+    }
+}
+
 /// Do the one thing that matters when we die unexpectedly: give the window back.
 fn install_panic_guard() {
     let prev = std::panic::take_hook();
@@ -208,6 +371,7 @@ fn install_panic_guard() {
                 let a = &mut *APP;
                 a.watcher.restore();
                 session::write(&[]);
+                #[cfg(windows)]
                 if let Some(t) = a.tray.as_mut() {
                     t.remove();
                 }
@@ -282,6 +446,7 @@ fn apply_autobind() {
     }
 }
 
+#[cfg(windows)]
 fn register_hotkeys(hwnd: HWND) {
     unsafe {
         let a = RegisterHotKey(
@@ -312,6 +477,7 @@ fn register_hotkeys(hwnd: HWND) {
     }
 }
 
+#[cfg(windows)]
 fn message_loop() {
     let mut msg = MSG::default();
     loop {
@@ -332,18 +498,22 @@ fn shutdown() {
     // Critical: never leave a window invisible behind us.
     a.watcher.unbind();
     session::write(&[]);
-    if let Some(t) = a.tray.as_mut() {
-        t.remove();
-    }
-    unsafe {
-        UnregisterHotKey(a.hwnd, HOTKEY_BIND);
-        UnregisterHotKey(a.hwnd, HOTKEY_TOGGLE);
-        UnregisterHotKey(a.hwnd, HOTKEY_LATCH);
+    #[cfg(windows)]
+    {
+        if let Some(t) = a.tray.as_mut() {
+            t.remove();
+        }
+        unsafe {
+            UnregisterHotKey(a.hwnd, HOTKEY_BIND);
+            UnregisterHotKey(a.hwnd, HOTKEY_TOGGLE);
+            UnregisterHotKey(a.hwnd, HOTKEY_LATCH);
+        }
     }
 }
 
 // ---------------------------------------------------------------- window proc
 
+#[cfg(windows)]
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
         WM_TIMER => {
@@ -403,6 +573,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
     }
 }
 
+#[cfg(windows)]
 fn create_message_window() -> HWND {
     unsafe {
         let hinst = GetModuleHandleW(std::ptr::null());
@@ -453,12 +624,12 @@ fn on_tick() {
         // watching — the user is mid-gesture and the bound window is untouched.
         let outcome = a.picker.as_mut().unwrap().tick(tick_ms());
         match outcome {
-            picker::Outcome::Continue => {}
-            picker::Outcome::Cancel => {
+            plat::picker::Outcome::Continue => {}
+            plat::picker::Outcome::Cancel => {
                 a.picker = None; // dropping the picker tears its frame down
                 notify("已取消绑定。");
             }
-            picker::Outcome::Pick(h) => {
+            plat::picker::Outcome::Pick(h) => {
                 a.picker = None;
                 bind_window(h);
             }
@@ -511,7 +682,10 @@ fn on_tick() {
         if let Some(h) = watched {
             a.scanner.suppress(h);
         }
+        #[cfg(windows)]
         notify("这个窗口拒绝被隐身（可能是管理员权限窗口）——已停止保护它。");
+        #[cfg(target_os = "linux")]
+        notify("无法隐身这个窗口（试试换一种隐身方式）——已停止保护它。");
         session::write(&[]);
         update_tray();
     }
@@ -552,7 +726,7 @@ fn open_picker() {
     if a.picker.is_some() {
         return;
     }
-    match picker::Picker::open() {
+    match plat::picker::Picker::open() {
         Some(p) => {
             a.picker = Some(p);
             notify("移动到要保护的窗口上，点击绑定；右键或 Esc 取消。");
@@ -601,7 +775,7 @@ fn toggle_hide() {
             .watcher
             .target
             .as_ref()
-            .map(|t| hide::owner_elevated(t.hwnd))
+            .map(|t| plat::hide::owner_elevated(t.hwnd))
             .unwrap_or(false);
         if elevated {
             notify("无法操作该窗口：它可能以管理员身份运行，请也用管理员身份启动 PeekGuard。");
@@ -629,6 +803,7 @@ fn toggle_latch() {
     update_tray();
 }
 
+#[cfg(windows)]
 fn menu_state() -> MenuState {
     let a = app();
     MenuState {
@@ -640,12 +815,13 @@ fn menu_state() -> MenuState {
         is_elevated: is_elevated(),
         rules: a.watcher.cfg.rules.len(),
         scan_enabled: !a.scanner.muted(),
-        autostart: autostart::enabled(),
+        autostart: plat::autostart::enabled(),
         check_update: a.watcher.cfg.check_update,
         update_available: a.update_available.as_ref().map(|i| i.version.clone()),
     }
 }
 
+#[cfg(windows)]
 fn on_menu(cmd: usize) {
     match cmd {
         CMD_BIND => toggle_bind(),
@@ -690,8 +866,8 @@ fn toggle_scan() {
 }
 
 fn toggle_autostart() {
-    let enable = !autostart::enabled();
-    match autostart::set(enable) {
+    let enable = !plat::autostart::enabled();
+    match plat::autostart::set(enable) {
         Ok(_) => notify(if enable {
             "已设置开机自动启动。"
         } else {
@@ -710,7 +886,7 @@ fn set_mode(mode: HideMode) {
     // Refuse to switch when the bound target already rejects outside style edits,
     // so the user doesn't discover a broken mode when the boss walks in.
     if let Some(t) = &a.watcher.target {
-        if hide::owner_elevated(t.hwnd) {
+        if plat::hide::owner_elevated(t.hwnd) {
             notify("这个窗口不接受外部样式修改（可能以管理员身份运行）。");
             update_tray();
             return;
@@ -718,10 +894,11 @@ fn set_mode(mode: HideMode) {
     }
     a.watcher.cfg.mode = mode;
     let _ = a.watcher.cfg.save();
-    notify(&format!("隐身方式: {}", tray::mode_name(mode)));
+    notify(&format!("隐身方式: {}", plat::mode_name(mode)));
     update_tray();
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn adjust_delay(delta: i64) {
     let a = app();
     let v = (a.watcher.cfg.delay_ms as i64 + delta).clamp(0, 5_000) as u64;
@@ -731,6 +908,7 @@ fn adjust_delay(delta: i64) {
     update_tray();
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn save_rule() {
     let a = app();
     let Some(t) = a.watcher.target.clone() else {
@@ -790,17 +968,24 @@ fn reload_config() {
     update_tray();
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn open_config() {
     let path = Config::config_path();
     let _ = Config::load();
     let p = path.to_string_lossy().to_string();
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", &p])
-        .spawn()
-        .ok();
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &p])
+            .spawn()
+            .ok();
+    }
+    #[cfg(target_os = "linux")]
+    x11::open_external(&p);
     notify(&format!("配置文件: {p}"));
 }
 
+#[cfg(windows)]
 fn about() {
     let a = app();
     about::show(a.hwnd);
@@ -808,9 +993,10 @@ fn about() {
 
 // ---------------------------------------------------------------- update check
 
-/// Kick off a background check. `manual` runs show a "checking…" balloon and
-/// report "up to date" / failure; the startup run stays quiet unless a new
+/// Kick off a background check. `manual` runs show a "checking…" notification
+/// and report "up to date" / failure; the startup run stays quiet unless a new
 /// release turns up. One check runs at a time.
+#[cfg(windows)]
 fn start_update_check(manual: bool) {
     let a = app();
     if a.update_checking {
@@ -844,6 +1030,45 @@ fn start_update_check(manual: bool) {
     });
 }
 
+#[cfg(target_os = "linux")]
+static UPDATE_RX: std::sync::Mutex<Option<std::sync::mpsc::Receiver<(bool, update::CheckResult)>>> =
+    std::sync::Mutex::new(None);
+
+/// Linux flavor: the worker hands its result back over a channel that the
+/// main loop drains every tick.
+#[cfg(target_os = "linux")]
+fn start_update_check(manual: bool) {
+    let a = app();
+    if a.update_checking {
+        if manual {
+            notify("正在检查更新…");
+        }
+        return;
+    }
+    a.update_checking = true;
+    if manual {
+        notify("正在检查更新…");
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<(bool, update::CheckResult)>();
+    *UPDATE_RX.lock().unwrap_or_else(|e| e.into_inner()) = Some(rx);
+    // The worker never touches APP; the main loop stays the sole owner of
+    // application state and lands the result on its next tick.
+    std::thread::spawn(move || {
+        let result = update::check();
+        let _ = tx.send((manual, result));
+    });
+}
+
+/// Drain finished checks queued by the update thread (Linux main loop).
+#[cfg(target_os = "linux")]
+fn poll_update_result() {
+    let guard = UPDATE_RX.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(rx) = guard.as_ref() else { return };
+    while let Ok((manual, result)) = rx.try_recv() {
+        on_update_result(manual, result);
+    }
+}
+
 /// Land a finished check on the UI thread.
 fn on_update_result(manual: bool, result: update::CheckResult) {
     let a = app();
@@ -852,8 +1077,14 @@ fn on_update_result(manual: bool, result: update::CheckResult) {
         update::CheckResult::Available(info) => {
             dbgmsg!("update available: {} {}", info.version, info.url);
             a.update_available = Some(info.clone());
+            #[cfg(windows)]
             notify(&format!(
                 "发现新版本 {} —— 右键托盘图标选“下载新版本”，或点一下本提示。",
+                info.version
+            ));
+            #[cfg(target_os = "linux")]
+            notify(&format!(
+                "发现新版本 {} —— 请到 GitHub Releases 页面下载更新。",
                 info.version
             ));
         }
@@ -874,6 +1105,7 @@ fn on_update_result(manual: bool, result: update::CheckResult) {
 }
 
 /// Turn the startup check on or off, and persist the choice.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn toggle_update_check() {
     let a = app();
     a.watcher.cfg.check_update = !a.watcher.cfg.check_update;
@@ -889,6 +1121,7 @@ fn toggle_update_check() {
 
 /// Open the release page for the newer version. If none is known yet, run a
 /// check instead of opening something arbitrary.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn open_update_page() {
     let a = app();
     match a.update_available.as_ref() {
@@ -900,6 +1133,7 @@ fn open_update_page() {
     }
 }
 
+#[cfg(windows)]
 fn open_url(url: &str) {
     let a = app();
     let op = to_wide("open");
@@ -916,6 +1150,13 @@ fn open_url(url: &str) {
     }
 }
 
+/// Linux opens links through `xdg-open`.
+#[cfg(target_os = "linux")]
+fn open_url(url: &str) {
+    x11::open_external(url);
+}
+
+#[cfg(windows)]
 fn update_tray() {
     let a = app();
     let tip = match (&a.watcher.target, a.watcher.state) {
@@ -931,8 +1172,14 @@ fn update_tray() {
     }
 }
 
+/// Linux has no tray, so there is no tooltip to keep current; state gets out
+/// through notifications and the IPC `status` command.
+#[cfg(target_os = "linux")]
+fn update_tray() {}
+
 // ---------------------------------------------------------------- helpers
 
+#[cfg(windows)]
 fn message_box(text: &str, caption: &str, ty: u32) {
     let t = to_wide(text);
     let c = to_wide(caption);
@@ -942,6 +1189,7 @@ fn message_box(text: &str, caption: &str, ty: u32) {
 }
 
 /// Transient balloon notification via the tray icon.
+#[cfg(windows)]
 fn notify(text: &str) {
     let a = app();
     let Some(tr) = a.tray.as_mut() else { return };
@@ -961,9 +1209,15 @@ fn notify(text: &str) {
     eprintln!("[peekguard] {text}");
 }
 
+/// Linux raises a desktop notification through `notify-send` (plus stderr).
+#[cfg(target_os = "linux")]
+fn notify(text: &str) {
+    x11::notify(text);
+}
+
 /// All visible top-level windows with a title, used for rule autobind.
 fn top_level_windows() -> Vec<HWND> {
-    win::top_level_windows()
+    crate::plat::top_level_windows()
 }
 
 // ---------------------------------------------------------------- ipc (uTools & scripts)
@@ -1029,13 +1283,13 @@ pub(crate) fn ipc_command(line: &str) -> String {
         }
         "mode" => match HideMode::parse(&arg) {
             Some(m) if app().watcher.cfg.mode == m => {
-                ipc_ok(&format!("隐身方式已经是 {}", tray::mode_name(m)))
+                ipc_ok(&format!("隐身方式已经是 {}", plat::mode_name(m)))
             }
             Some(m) => {
                 set_mode(m);
                 // set_mode refuses on windows that reject outside style edits.
                 if app().watcher.cfg.mode == m {
-                    ipc_ok(&format!("隐身方式已切换为 {}", tray::mode_name(m)))
+                    ipc_ok(&format!("隐身方式已切换为 {}", plat::mode_name(m)))
                 } else {
                     ipc_err("这个窗口不接受外部样式修改（可能以管理员身份运行）")
                 }
@@ -1067,7 +1321,7 @@ pub(crate) fn ipc_command(line: &str) -> String {
             ipc_ok("配置已重载")
         }
         "autostart" => {
-            let current = autostart::enabled();
+            let current = plat::autostart::enabled();
             match parse_toggle_arg(&arg, current) {
                 Ok(want) if current == want => ipc_ok(if want {
                     "开机自启已经开启"
@@ -1076,7 +1330,7 @@ pub(crate) fn ipc_command(line: &str) -> String {
                 }),
                 Ok(want) => {
                     toggle_autostart();
-                    if autostart::enabled() == want {
+                    if plat::autostart::enabled() == want {
                         ipc_ok(if want {
                             "已设置开机自动启动"
                         } else {
@@ -1116,7 +1370,7 @@ fn force_hide() -> Result<String, String> {
             .watcher
             .target
             .as_ref()
-            .map(|t| hide::owner_elevated(t.hwnd))
+            .map(|t| plat::hide::owner_elevated(t.hwnd))
             .unwrap_or(false);
         Err(if elevated {
             "无法操作该窗口：它可能以管理员身份运行，请也用管理员身份启动 PeekGuard".to_string()
@@ -1211,7 +1465,7 @@ fn ipc_state_json() -> String {
         !a.scanner.muted(),
         a.picker.is_some(),
         is_elevated(),
-        autostart::enabled(),
+        plat::autostart::enabled(),
         ipc::escape_json(&Config::config_path().to_string_lossy()),
     )
 }

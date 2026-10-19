@@ -2,8 +2,8 @@
 #![allow(dead_code)]
 
 use crate::config::Config;
-use crate::hide::{hide, Hidden};
-use crate::win::*;
+use crate::plat::hide::{hide, Hidden};
+use crate::plat::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -105,6 +105,11 @@ pub struct Watcher {
     last_inside_ms: Option<u64>,
     /// Set when we hid because the user asked explicitly (hotkey/tray) rather than the mouse leaving.
     manual: bool,
+    /// Set by a restore while the cursor is away from the window: auto-hide is
+    /// suspended until the cursor has been inside once. Without it, restoring by
+    /// hotkey with the cursor parked elsewhere would hide the window again within
+    /// a tick or two and the hotkey would look broken.
+    awaiting_entry: bool,
 }
 
 impl Watcher {
@@ -117,6 +122,7 @@ impl Watcher {
             last_cursor: POINT::default(),
             last_inside_ms: None,
             manual: false,
+            awaiting_entry: false,
         }
     }
 
@@ -127,6 +133,7 @@ impl Watcher {
                 self.target = Some(t);
                 self.state = State::Armed;
                 self.manual = false;
+                self.awaiting_entry = false;
                 self.last_inside_ms = None;
                 true
             }
@@ -139,6 +146,7 @@ impl Watcher {
         self.target = None;
         self.state = State::Idle;
         self.manual = false;
+        self.awaiting_entry = false;
         self.last_inside_ms = None;
     }
 
@@ -151,6 +159,10 @@ impl Watcher {
             self.state = State::Armed;
         }
         self.manual = false;
+        // Auto-hide stays suspended until the cursor comes back inside once;
+        // see the field docs. The auto-restore path (cursor already inside)
+        // clears this on the very next tick.
+        self.awaiting_entry = true;
     }
 
     /// Force-hide (hotkey/tray). Only valid with a live target.
@@ -168,6 +180,7 @@ impl Watcher {
                     State::Hidden
                 };
                 self.manual = true;
+                self.awaiting_entry = false;
                 true
             }
             None => false,
@@ -257,7 +270,7 @@ impl Watcher {
             return Action::None;
         }
         if self.cfg.hide_only_when_focused {
-            let fg = unsafe { GetForegroundWindow() };
+            let fg = foreground_window();
             if fg != target.hwnd {
                 self.state = State::Armed;
                 return Action::None;
@@ -266,11 +279,15 @@ impl Watcher {
 
         let inside = self.cursor_inside(cursor, false);
         if inside {
+            self.awaiting_entry = false;
             self.last_inside_ms = Some(now_ms);
         }
         match self.state {
             State::Armed => {
-                if !inside {
+                // `awaiting_entry` suspends the countdown after a restore with the
+                // cursor away: the window must get one visit before leaving can
+                // hide it again.
+                if !inside && !self.awaiting_entry {
                     // Start the countdown from the last tick the cursor really was
                     // inside, not from this one. Using now_ms here would throw away
                     // up to a whole poll interval before the configured delay even

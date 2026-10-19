@@ -1,6 +1,7 @@
 //! Config + rules persistence. Hand-rolled line format, zero dependencies.
 //!
-//! File format (`peekguard.conf`, next to the exe or in %APPDATA%\PeekGuard):
+//! File format (`peekguard.conf`, next to the exe or in %APPDATA%\PeekGuard on
+//! Windows, $XDG_CONFIG_HOME/peekguard on Linux):
 //!
 //! ```text
 //! # comment
@@ -201,12 +202,26 @@ impl Default for Config {
 }
 
 impl Config {
+    #[cfg(windows)]
     pub fn config_dir() -> PathBuf {
         if let Ok(appdata) = std::env::var("APPDATA") {
             PathBuf::from(appdata).join("PeekGuard")
         } else {
             PathBuf::from(".")
         }
+    }
+
+    /// Linux follows the XDG base directory spec: `$XDG_CONFIG_HOME/peekguard`,
+    /// falling back to `~/.config/peekguard`.
+    #[cfg(target_os = "linux")]
+    pub fn config_dir() -> PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            if !xdg.trim().is_empty() {
+                return PathBuf::from(xdg).join("peekguard");
+            }
+        }
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config").join("peekguard")
     }
 
     pub fn config_path() -> PathBuf {

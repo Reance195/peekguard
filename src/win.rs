@@ -741,6 +741,11 @@ pub fn tick_ms() -> u64 {
     unsafe { GetTickCount64() }
 }
 
+/// Safe wrapper: the window currently in the foreground (or null).
+pub fn foreground_window() -> HWND {
+    unsafe { GetForegroundWindow() }
+}
+
 /// All visible top-level windows with a title, in z-order (front first).
 /// Used by rule matching; the guard itself only ever touches one window.
 pub fn top_level_windows() -> Vec<HWND> {

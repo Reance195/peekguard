@@ -21,17 +21,19 @@
 └──────────────┘           └──────────────┘           └──────────────┘
 ```
 
-- **零依赖**：只用标准库 + 手写 Win32 FFI，没有 crates.io 依赖
-- **单文件 exe**：约 380 KB，免安装，运行在托盘
+- **零依赖**：只用标准库 + 手写 Win32 / X11 FFI，没有 crates.io 依赖
+- **单文件可执行**：Windows 是约 380 KB 的 exe，免安装，运行在托盘；Linux 是普通二进制，
+  由热键与 IPC 驱动
 - **零侵入**：不注入、不子类化、不装全局钩子，对目标进程完全不碰
 - **绝不留残局**：崩溃、强杀、异常退出都会在下次启动时还原窗口
 - **常驻规则**：写一行 `rule =`，程序自己认出该保护哪些窗口
 
-> 仅支持 Windows（x86_64）。
+> 支持 Windows（x86_64）与 Linux（X11，含 WSLg）；macOS 暂未支持。
 
 ## 下载
 
-从 [Releases](../../releases) 下载 `peekguard.exe`，直接双击运行即可，无需安装。
+从 [Releases](../../releases) 下载 `peekguard.exe`（Windows），直接双击运行即可，无需安装；
+Linux 暂不提供预构建包，按下面「从源码构建」一节自行构建。
 
 ## 从源码构建
 
@@ -40,11 +42,36 @@
 ```sh
 git clone https://github.com/Reance195/peekguard.git
 cd peekguard
-cargo build --release      # -> target/release/peekguard.exe
+cargo build --release      # Windows -> target/release/peekguard.exe
+                           # Linux   -> target/release/peekguard
 ```
 
-首次运行会在 `%APPDATA%\PeekGuard\peekguard.conf` 生成默认配置。
+Windows：首次运行会在 `%APPDATA%\PeekGuard\peekguard.conf` 生成默认配置；
 启动后进入系统托盘，没有主窗口。
+
+Linux：运行时用 `dlopen` 加载系统的 `libX11.so.6`，零链接依赖（也不需要装 `-dev` 包）；
+配置写入 `~/.config/peekguard/peekguard.conf`（遵循 XDG）。
+
+## Linux（X11）
+
+Linux 版的行为与 Windows 版一致：绑定窗口、鼠标离开自动隐身、移回恢复，热键与三种隐身方式
+都不变。区别在于**没有系统托盘**，控制方式换成了热键、桌面通知和本机 IPC：
+
+- 热键不变：`Ctrl+Alt+P` 绑定、`Ctrl+Alt+H` 隐身/恢复、`Ctrl+Alt+L` 锁存
+- 状态与操作均可通过 **Unix 域套接字 IPC** 完成（默认 `$XDG_RUNTIME_DIR/peekguard-ipc.sock`，
+  权限 0600，只有当前用户可连）。协议与 Windows 命名管道完全一致——一行文本命令、
+  一行 JSON 响应；`PEEKGUARD_PIPE` 可指向别处（以 `/` 开头视为绝对路径）。
+  快速自测：`node utools-plugin/test-cli.js status`
+- 提示信息走桌面通知（`notify-send`）
+
+注意点：
+
+- **透明模式需要合成器**（compositor）在运行；没有合成器时会提示并拒绝该模式，
+  可换用「移出屏幕」或「隐藏窗口」
+- 配置文件与开机自启遵循 XDG：配置在 `~/.config/peekguard/`；开机自启是
+  `~/.config/autostart/` 下的 `.desktop` 文件（用 IPC 命令 `autostart on|off` 开关）
+- 更新检查改用系统的 `curl`（未安装时静默失败，不影响其它功能）
+- X11 没有 Windows 的 UIPI，提权目标拦截不适用；进程名从 `/proc` 读取
 
 ## 用法
 
@@ -54,7 +81,7 @@ cargo build --release      # -> target/release/peekguard.exe
 | 立即隐身 / 恢复 | `Ctrl+Alt+H` |
 | 切换锁存模式 | `Ctrl+Alt+L` |
 
-托盘图标：
+Windows 托盘图标（Linux 版没有托盘，用热键与 IPC 代替）：
 
 - **双击** = 选择并绑定窗口（十字光标选择器）
 - **右键** = 完整菜单（隐身方式、规则自动保护、延迟、锁存、存规则、开机自启、重载配置、退出）
@@ -64,7 +91,8 @@ cargo build --release      # -> target/release/peekguard.exe
 1. 切到你想保护的窗口（QQ、浏览器、股票软件……）
 2. 按 `Ctrl+Alt+P` 出现十字光标，把光标移到目标窗口上左键绑定；右键或 Esc 取消
 3. 鼠标移开，窗口自动隐身；鼠标移回原位置，窗口自动恢复
-4. 觉得好用，托盘右键 →「把当前绑定存为常驻规则」，以后这个程序一打开就自动受保护
+4. 觉得好用就把这次绑定固定下来：Windows 上托盘右键 →「把当前绑定存为常驻规则」；
+   Linux 上往配置文件写一行 `rule =`，以后这个程序一打开就自动受保护
 
 ## 三种隐身方式
 
@@ -77,6 +105,9 @@ cargo build --release      # -> target/release/peekguard.exe
 | **隐藏窗口** | `ShowWindow(SW_HIDE)` | 兼容性最好，但任务栏按钮会留着 |
 
 > 透明模式下窗口依然能被点击。这是刻意的——你可以在"隐形"状态下继续用它。
+
+Linux 上的三种方式分别对应 `_NET_WM_WINDOW_OPACITY`、`XMoveWindow` 移出虚拟屏、
+`XUnmapWindow`；透明模式同样需要合成器支持。
 
 ## 锁存模式
 
@@ -126,8 +157,7 @@ cargo build --release      # -> target/release/peekguard.exe
 
 ## 开机自启
 
-托盘菜单 →「开机自动启动」，带勾选状态（实时读注册表，不缓存）。
-
+Windows：托盘菜单 →「开机自动启动」，带勾选状态（实时读注册表，不缓存）。
 实现在 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下写一条 `PeekGuard`，
 指向当前 exe 的完整路径（带引号，能处理路径里的空格）。
 用注册表而不是启动文件夹/计划任务：不需要管理员权限、不弹控制台窗口、没有守护进程。
@@ -135,10 +165,14 @@ cargo build --release      # -> target/release/peekguard.exe
 移动了 exe 位置之后，勾选状态仍显示为已开启（按名字识别），
 取消再重新勾选一次即可指向新路径。
 
+Linux：写 XDG autostart 的 `.desktop` 文件（`~/.config/autostart/PeekGuard.desktop`），
+由桌面会话在登录时启动。没有托盘入口，用 IPC 命令 `autostart on|off` 开关。
+
 ## 配置文件
 
-`%APPDATA%\PeekGuard\peekguard.conf`，也可以用环境变量 `PEEKGUARD_CONFIG` 指向别处。
-改完在托盘菜单点「重载配置」生效。
+Windows：`%APPDATA%\PeekGuard\peekguard.conf`；Linux：`~/.config/peekguard/peekguard.conf`（遵循 XDG）。
+也可以用环境变量 `PEEKGUARD_CONFIG` 指向别处。
+改完在托盘菜单点「重载配置」，或在任何平台用 IPC 命令 `reload` 生效。
 
 ```ini
 # 鼠标离开窗口后等待多少毫秒才隐身（防抖，避免鼠标一抖就闪）
@@ -184,22 +218,24 @@ rule = process:msedge.exe | title:小说,股票
 
 PeekGuard 可以告诉你有没有新版本。启动时会向公开的 GitHub Releases API
 （`https://api.github.com/repos/Reance195/peekguard/releases/latest`）发一次匿名 `GET`，
-把返回的 `tag_name` 与自身版本比较。若有更新，弹一个托盘气泡提示；点气泡，或选托盘菜单
-→「下载新版本 vX.Y.Z」，会用浏览器打开对应的 Release 页面。PeekGuard 自己**从不自动下载
-或启动**任何东西。
+把返回的 `tag_name` 与自身版本比较。若有更新就提示（Windows：托盘气泡，可点击或经托盘菜单
+「下载新版本 vX.Y.Z」打开 Release 页面；Linux：桌面通知，到 Releases 页手动下载）。
+PeekGuard 自己**从不自动下载或启动**任何东西。
 
 - 托盘菜单 →「检查更新…」立即查一次：有新版本给提示，否则报「已是最新版本」或失败原因。
 - 托盘菜单 →「启动时自动检查更新」开关启动检查（勾选状态存到配置项 `check_update`）。
 - 把 `check_update` 设为 `false` 即可彻底关闭；此时 PeekGuard 不发起任何网络请求。
+- Linux 没有托盘菜单，检查更新在启动时自动进行；`check_update = false` 同样可关闭。
 
 这次检查不上传你的任何信息——没有设备标识、没有使用数据、没有遥测。它是程序里**唯一**的
-网络代码，位于 `src/update.rs`，用 WinHTTP 手写（不引入 crate）；`src/win.rs` 依然是它导入
-的全部 Win32 API 清单。
+网络代码，位于 `src/update.rs`：Windows 用手写 WinHTTP，Linux 调用系统 `curl`——
+都不引入任何 crate。
 
 ## uTools 插件（可选）
 
 [`utools-plugin/`](utools-plugin/) 是一个配套的 [uTools](https://www.u-tools.cn/) 插件，
 把常用操作搬进 uTools 的搜索框，不用再翻托盘菜单。
+（uTools 没有 Linux 版，插件面向 Windows 与未来的 macOS；Linux 下请直接用下面的 IPC 工具。）
 
 安装：uTools →「插件应用市场」里搜 `PeekGuard`（若尚未上架，可用「开发者工具 → 新建项目」
 直接加载本仓库的 `utools-plugin/` 目录；插件无构建步骤，加载即用）。
@@ -214,19 +250,21 @@ PeekGuard 可以告诉你有没有新版本。启动时会向公开的 GitHub Re
 PeekGuard 没在运行时，插件会探测常见安装位置并一键启动；找不到时可在面板里手动指定
 `peekguard.exe` 路径（会被记住）。
 
-插件与 PeekGuard 之间是**本地命名管道**（`\\.\pipe\PeekGuard-IPC-v1`）：一行文本命令、
-一行 JSON 响应，任何脚本都能用。协议表和命令行工具见
-[`utools-plugin/README.md`](utools-plugin/README.md)，快速自测：`node utools-plugin/test-cli.js`。
+插件与 PeekGuard 之间是**本地 IPC**（Windows 为命名管道 `\\.\pipe\PeekGuard-IPC-v1`，
+Linux 为 `$XDG_RUNTIME_DIR/peekguard-ipc.sock`）：一行文本命令、一行 JSON 响应，
+任何脚本都能用。协议表和命令行工具见
+[`utools-plugin/README.md`](utools-plugin/README.md)，快速自测：`node utools-plugin/test-cli.js status`。
 
 ## 已知限制
 
 | 情况 | 表现 | 说明 |
 |---|---|---|
-| 目标以管理员身份运行 | 拒绝操作并提示 | Windows 的 UIPI 机制，提权进程的窗口不接受普通进程修改。**用管理员身份启动 PeekGuard 即可解决** |
+| 目标以管理员身份运行（Windows） | 拒绝操作并提示 | Windows 的 UIPI 机制，提权进程的窗口不接受普通进程修改。**用管理员身份启动 PeekGuard 即可解决** |
 | UWP 应用（设置、照片、计算器） | 可能无效 | 这类窗口由 `ApplicationFrameHost` 托管，实际窗口句柄不是你所看到的那个 |
 | 使用 `UpdateLayeredWindow` 的程序 | 透明模式无效 | 自动检测；换「移出屏幕」方式即可 |
 | 目标程序自己重设窗口样式 | 会被"治好" | 需要重新隐身 |
 | 多显示器 / 负坐标 | 已处理 | 坐标基于虚拟屏空间，并启用 per-monitor DPI awareness |
+| Linux 上没有合成器 | 透明模式被拒绝 | 自动检测并提示；改用「移出屏幕」或「隐藏窗口」 |
 
 ### 安全边界
 
@@ -246,8 +284,9 @@ PeekGuard 没在运行时，插件会探测常见安装位置并一键启动；�
 ## 开发
 
 ```sh
-cargo build --release      # -> target/release/peekguard.exe (~380 KB，零依赖)
-cargo test                 # 22 个单元测试（运行 21 个，另 1 个 #[ignore] 诊断）
+cargo build --release      # Windows -> target/release/peekguard.exe（约 380 KB，零依赖）
+                           # Linux   -> target/release/peekguard
+cargo test                 # 单元测试：Windows 32 个 / Linux 38 个（各含 1 个 #[ignore] 诊断）
 
 # 端到端（会移动真实鼠标，需要交互式桌面）
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_live.py; done         # 23 项
@@ -258,12 +297,14 @@ for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_panic.py; done  
 python tests/e2e_ipc.py                                                               # 40 项（命名管道 IPC）
 ```
 
+以下端到端套件是 Windows 专用（需要交互式桌面）。
 合计 280 项端到端检查全绿（三个隐身模式各跑一遍）。每份测试都自己取一个独立的 `PEEKGUARD_MUTEX`
 单实例名，所以不会和你正在跑的 PeekGuard 抢互斥；测试用的规则同时限定
 `class:` 和 `title:`，只命中测试自己的窗口。IPC 测试同样有自己独立的管道名和配置文件。
 
 `PEEKGUARD_MODE=alpha|move|hide` 切换端到端测试的隐身方式，
-`PEEKGUARD_DEBUG=1` 输出详细日志到 stderr 和 `%APPDATA%\PeekGuard\debug.log`。
+`PEEKGUARD_DEBUG=1` 输出详细日志到 stderr 和平台配置目录下的 `debug.log`
+（Windows 为 `%APPDATA%\PeekGuard\debug.log`，Linux 为 `~/.config/peekguard/debug.log`）。
 其余环境变量见 [`tests/README.md`](tests/README.md)。
 
 CI 跑 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`
@@ -279,10 +320,12 @@ SDK 头文件逐行对得上，改名反而更难核对。
 | 文件 | 职责 |
 |---|---|
 | `src/win.rs` | 手写 Win32 FFI（零依赖，x86_64 only），含注册表 |
+| `src/x11/` | 手写 X11 FFI 与 Linux 实现：运行时 dlopen `libX11.so.6`；含 hide / picker / autostart / ipc |
+| `src/plat.rs` | 平台转发层（Windows → `win` 系模块，Linux → `x11/`） |
 | `src/hide.rs` | 隐身原语 + 状态快照 / 无损还原 |
 | `src/watch.rs` | 状态机：鼠标轮询、延迟防抖、锁存 |
 | `src/rules.rs` | 常驻规则扫描：限速轮询、挑选目标、逐窗口抑制 |
-| `src/ipc.rs` | 命名管道 IPC 服务（uTools 插件与脚本的接口） |
+| `src/ipc.rs` | IPC 服务（Windows 命名管道；Linux 实现见 `src/x11/ipc.rs`） |
 | `src/config.rs` | 配置解析 + 规则匹配 |
 | `src/autostart.rs` | 开机自启（直接读写 HKCU Run，无子进程） |
 | `src/session.rs` | 崩溃恢复日志 |
@@ -335,26 +378,35 @@ SDK 头文件逐行对得上，改名反而更难核对。
 
 | 路径 | 内容 | 写入时机 |
 |---|---|---|
-| `%APPDATA%\PeekGuard\peekguard.conf` | 配置文件 | 首次运行时写入；可用 `PEEKGUARD_CONFIG`，或放在 exe 同目录的 `peekguard.conf` 覆盖 |
-| `%APPDATA%\PeekGuard\hidden.journal` | 崩溃恢复日志 | 仅在窗口处于隐身状态时存在；窗口恢复后删除 |
-| `%APPDATA%\PeekGuard\debug.log` | 诊断日志 | 仅当 `PEEKGUARD_DEBUG=1` 时 |
+| `%APPDATA%\PeekGuard\peekguard.conf`（Linux：`~/.config/peekguard/peekguard.conf`） | 配置文件 | 首次运行时写入；可用 `PEEKGUARD_CONFIG`，或放在可执行文件同目录的 `peekguard.conf` 覆盖 |
+| 同上目录下的 `hidden.journal` | 崩溃恢复日志 | 仅在窗口处于隐身状态时存在；窗口恢复后删除 |
+| 同上目录下的 `debug.log` | 诊断日志 | 仅当 `PEEKGUARD_DEBUG=1` 时 |
 
 托盘图标是运行时生成的，不会落盘。
 
-PeekGuard 唯一可能对系统的修改，是在
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下写一个 `PeekGuard` 值，
-且仅在你通过托盘菜单的 "start with Windows" 主动勾选后才会发生。取消勾选即删除该值。
+PeekGuard 唯一可能对系统的修改是开机自启那一条：Windows 写
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下的 `PeekGuard` 值；
+Linux 写 `~/.config/autostart/PeekGuard.desktop`。都只在你主动开启后才会发生，关闭即删除。
 
-它不会注入代码、不对窗口做子类化、不安装全局钩子。唯一的跨进程调用是
-`PROCESS_QUERY_LIMITED_INFORMATION`，用于读取窗口的进程名以匹配 `rule = process:…`，
-以及判断目标进程是否以管理员权限运行。
+它不会注入代码、不对窗口做子类化、不安装全局钩子。Windows 上唯一的跨进程调用是
+`PROCESS_QUERY_LIMITED_INFORMATION`（读取进程名以匹配 `rule = process:…`、判断是否提权）；
+Linux 上进程名直接从 `/proc` 读取，不对目标进程做任何操作。
 
 ### 卸载
+
+Windows：
 
 1. 托盘菜单 → 退出
 2. 若勾选了 "start with Windows"，取消勾选（这一步会删除注册表值）
 3. 删除 exe
 4. 删除 `%APPDATA%\PeekGuard\`
+
+Linux：
+
+1. 结束 peekguard 进程（窗口退出前会自动恢复）
+2. 若开了自启：IPC 命令 `autostart off`，或删除 `~/.config/autostart/PeekGuard.desktop`
+3. 删除可执行文件
+4. 删除 `~/.config/peekguard/`
 
 ## License
 

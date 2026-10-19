@@ -23,9 +23,10 @@ cursor inside the window      350 ms after it left         cursor returns
 └──────────────┘           └──────────────┘           └──────────────┘
 ```
 
-- **Zero dependencies** — standard library and hand-written Win32 FFI only. Nothing
-  from crates.io.
-- **One file** — a ~380 KB exe. No installer. Lives in the tray.
+- **Zero dependencies** — standard library and hand-written Win32 / X11 FFI only.
+  Nothing from crates.io.
+- **One file** — a ~380 KB exe on Windows, no installer, lives in the tray; a plain
+  binary on Linux, driven by hotkeys and IPC.
 - **Zero intrusion** — no injection, no subclassing, no global hooks. The target
   process is never touched.
 - **Never leaves a mess** — a crash, a task-manager kill, or an abnormal exit all get
@@ -33,12 +34,12 @@ cursor inside the window      350 ms after it left         cursor returns
 - **Standing rules** — write one `rule =` line and PeekGuard figures out which windows
   to protect on its own.
 
-> Windows only (x86_64).
+> Windows (x86_64) and Linux (X11, WSLg included); macOS is not supported yet.
 
 ## Download
 
-Grab `peekguard.exe` from the [Releases](../../releases). Run it — there is nothing to
-install.
+Grab `peekguard.exe` (Windows) from the [Releases](../../releases). Run it — there is
+nothing to install. Linux builds from source (see below); no prebuilt package yet.
 
 ## Build from source
 
@@ -47,11 +48,43 @@ Requires Rust 1.87 or newer (the code uses `is_multiple_of`):
 ```sh
 git clone https://github.com/Reance195/peekguard.git
 cd peekguard
-cargo build --release      # -> target/release/peekguard.exe
+cargo build --release      # Windows -> target/release/peekguard.exe
+                           # Linux   -> target/release/peekguard
 ```
 
-On first run a default config is written to `%APPDATA%\PeekGuard\peekguard.conf`.
-PeekGuard then sits in the tray; it has no main window.
+On Windows a default config is written to `%APPDATA%\PeekGuard\peekguard.conf` on first
+run, and PeekGuard then sits in the tray; it has no main window.
+
+On Linux the binary `dlopen`s the system's `libX11.so.6` at runtime — zero link
+dependencies, and no `-dev` package needed. The config lives in
+`~/.config/peekguard/peekguard.conf` (XDG).
+
+## Linux (X11)
+
+The Linux build behaves like the Windows one: bind a window, it hides when the mouse
+leaves and comes back when it returns — same hotkeys, same three hide strategies. What
+it does **not** have is a system tray; control moves to hotkeys, desktop notifications
+and local IPC:
+
+- Hotkeys are unchanged: `Ctrl+Alt+P` bind, `Ctrl+Alt+H` hide/restore, `Ctrl+Alt+L` latch.
+- State and actions are available over a **Unix domain socket** IPC (default
+  `$XDG_RUNTIME_DIR/peekguard-ipc.sock`, mode 0600 — only your user can connect). The
+  protocol is identical to the Windows named pipe: one text command line in, one JSON
+  line out. `PEEKGUARD_PIPE` points it elsewhere (a leading `/` means an absolute path).
+  Quick test: `node utools-plugin/test-cli.js status`
+- Messages go out as desktop notifications (`notify-send`).
+
+Things to know:
+
+- **Alpha mode needs a compositor** to be running; without one PeekGuard says so and
+  refuses, so use "move" or "hide" instead.
+- Config and autostart follow XDG: config in `~/.config/peekguard/`, autostart as a
+  `.desktop` file in `~/.config/autostart/` (switch it with the IPC command
+  `autostart on|off`).
+- The update check shells out to the system `curl` (fails silently when it is missing;
+  nothing else is affected).
+- There is no UIPI on X11, so the elevated-target refusal does not apply; process names
+  are read from `/proc`.
 
 ## Usage
 
@@ -61,7 +94,7 @@ PeekGuard then sits in the tray; it has no main window.
 | Hide / restore right now | `Ctrl+Alt+H` |
 | Toggle latch mode | `Ctrl+Alt+L` |
 
-Tray icon:
+Tray icon (Windows; Linux has no tray — use the hotkeys and IPC instead):
 
 - **Double-click** — bind a window via crosshair picker
 - **Right-click** — full menu (hide strategy, rule auto-protection, delay, latch,
@@ -72,8 +105,9 @@ Tray icon:
 1. Switch to the window you want guarded (QQ, a browser, your stock app…)
 2. Press `Ctrl+Alt+P` — a crosshair appears; highlight the target window and left-click to bind
 3. Move the mouse away and the window hides; move back to the same spot and it returns
-4. If you like it, tray → "save the current binding as a standing rule" and every
-   launch from now on is guarded automatically
+4. Make it permanent if you like it: on Windows, tray → "save the current binding as a
+   standing rule"; on Linux, add a `rule =` line to the config — and every launch from
+   now on is guarded automatically
 
 ## Three hide strategies
 
@@ -87,6 +121,9 @@ Cycle them from tray → "hide strategy".
 
 > In alpha mode the window still accepts clicks. That is deliberate: you can keep
 > using the window while it is invisible.
+
+On Linux the three strategies map to `_NET_WM_WINDOW_OPACITY`, `XMoveWindow` (parked off
+the virtual screen) and `XUnmapWindow`; alpha mode likewise needs a compositor.
 
 ## Latch mode
 
@@ -144,10 +181,8 @@ guarded again for the rest of the session — which is clearly not what anyone m
 
 ## Run at login
 
-Tray menu → "start with Windows", with a checkmark (read live from the registry, not
-cached).
-
-It writes a single `PeekGuard` value under
+On Windows: tray menu → "start with Windows", with a checkmark (read live from the
+registry, not cached). It writes a single `PeekGuard` value under
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, pointing at the full path of the
 current exe (quoted, so spaces are fine). The registry rather than the Startup folder or
 Task Scheduler: no elevation, no console window flash, no watchdog process.
@@ -155,10 +190,15 @@ Task Scheduler: no elevation, no console window flash, no watchdog process.
 If you move the exe the checkmark stays on (it matches by name) — untick and re-tick it
 once to repoint it at the new location.
 
+On Linux: an XDG autostart entry (a `.desktop` file in `~/.config/autostart/`), launched
+by the desktop session at login. No tray item — switch it with the IPC command
+`autostart on|off`.
+
 ## Configuration
 
-`%APPDATA%\PeekGuard\peekguard.conf`, or point `PEEKGUARD_CONFIG` somewhere else.
-Reload it from the tray menu after editing.
+Windows: `%APPDATA%\PeekGuard\peekguard.conf`. Linux:
+`~/.config/peekguard/peekguard.conf` (XDG). Or point `PEEKGUARD_CONFIG` somewhere else.
+After editing, reload from the tray menu or with the IPC command `reload` (any platform).
 
 ```ini
 # ms to wait after the cursor leaves before hiding (debounce, so a shaky
@@ -208,9 +248,10 @@ are combined with **AND**.
 PeekGuard can tell you when a newer release is out. On startup it makes a single
 unauthenticated `GET` to the public GitHub Releases API
 (`https://api.github.com/repos/Reance195/peekguard/releases/latest`) and compares the
-`tag_name` with its own version. If a newer one exists it shows a tray balloon; click
-the balloon, or pick tray menu → "download version vX.Y.Z", to open the release page in
-your browser. Nothing is ever downloaded or launched automatically by PeekGuard itself.
+`tag_name` with its own version. If a newer one exists it says so (Windows: a tray
+balloon you can click, or tray menu → "download version vX.Y.Z", to open the release
+page; Linux: a desktop notification — download from the Releases page). Nothing is ever
+downloaded or launched automatically by PeekGuard itself.
 
 - Tray menu → "check for updates" runs a check on demand, and reports that you are
   current or the reason it failed.
@@ -218,17 +259,19 @@ your browser. Nothing is ever downloaded or launched automatically by PeekGuard 
   is stored as `check_update` in the config).
 - Set `check_update = false` to turn it off completely. With that set, PeekGuard makes
   no network request of any kind.
+- Linux has no tray menu; there the startup check runs automatically, and
+  `check_update = false` turns it off the same way.
 
 The check sends no information about you or your machine — no identifiers, no usage
-data, no telemetry. It is the only network code in the program, and it is written by
-hand against WinHTTP in `src/update.rs` (no crate); the rest of `src/win.rs` remains
-the complete list of Win32 APIs the program imports.
+data, no telemetry. It is the only network code in the program, in `src/update.rs`:
+hand-written WinHTTP on Windows and the system `curl` on Linux — no crate either way.
 
 ## uTools plugin (optional)
 
 [`utools-plugin/`](utools-plugin/) is a companion [uTools](https://www.u-tools.cn/)
 plugin that moves the usual actions into uTools' search bar, so you never have to hunt
-for the tray icon.
+for the tray icon. (uTools has no Linux build; the plugin targets Windows and a future
+macOS. On Linux, use the IPC tools directly.)
 
 Install: in uTools, search the plugin marketplace for `PeekGuard`; alternatively load
 the `utools-plugin/` folder directly from uTools → Developer Tools → create project
@@ -246,20 +289,22 @@ If PeekGuard is not running, the plugin probes the usual install locations and c
 launch it; if that fails, pick `peekguard.exe` manually in the panel (the path is
 remembered).
 
-The plugin talks to PeekGuard over a **local named pipe** (`\\.\pipe\PeekGuard-IPC-v1`):
+The plugin talks to PeekGuard over **local IPC** (the named pipe
+`\\.\pipe\PeekGuard-IPC-v1` on Windows, `$XDG_RUNTIME_DIR/peekguard-ipc.sock` on Linux):
 one text line in, one JSON line out — any script can do the same. See
 [`utools-plugin/README.md`](utools-plugin/README.md) for the protocol table, or try
-`node utools-plugin/test-cli.js`.
+`node utools-plugin/test-cli.js status`.
 
 ## Known limitations
 
 | Situation | Behaviour | Notes |
 |---|---|---|
-| Target runs elevated | refused, with a message | Windows UIPI: an elevated process's windows cannot be modified by a normal one. **Run PeekGuard elevated and this goes away** |
+| Target runs elevated (Windows) | refused, with a message | Windows UIPI: an elevated process's windows cannot be modified by a normal one. **Run PeekGuard elevated and this goes away** |
 | UWP apps (Settings, Photos, Calculator) | may not work | these are hosted by `ApplicationFrameHost`; the real window handle is not the one you see |
 | Programs using `UpdateLayeredWindow` | alpha mode is inert | detected automatically; switch to "move" instead |
 | The target restyles its own window | PeekGuard "heals" it | hide once more |
 | Multiple monitors / negative coordinates | handled | geometry is in virtual-screen space, and per-monitor DPI awareness is on |
+| No compositor on Linux | alpha mode refused | detected automatically; use "move" or "hide" instead |
 
 ### Safety boundaries
 
@@ -289,8 +334,9 @@ one text line in, one JSON line out — any script can do the same. See
 ## Development
 
 ```sh
-cargo build --release      # -> target/release/peekguard.exe (~380 KB, zero deps)
-cargo test                 # 22 unit tests (21 run; 1 #[ignore] diagnostic)
+cargo build --release      # Windows -> target/release/peekguard.exe (~380 KB, zero deps)
+                           # Linux   -> target/release/peekguard
+cargo test                 # unit tests: 32 (Windows) / 38 (Linux); 1 #[ignore] diagnostic each
 
 # end-to-end (moves the real cursor, needs an interactive desktop)
 for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_live.py; done         # 23 checks
@@ -301,6 +347,7 @@ for m in alpha move hide; do PEEKGUARD_MODE=$m python tests/e2e_panic.py; done  
 python tests/e2e_ipc.py                                                               # 40 checks (named-pipe IPC)
 ```
 
+The end-to-end suites below are Windows-only (they need an interactive desktop).
 280 end-to-end checks in total, all green (each hide strategy is certified separately).
 Every suite names its own `PEEKGUARD_MUTEX` single-instance name, so it never fights the
 PeekGuard you already have running; the rules under test pin both `class:` and `title:`
@@ -308,9 +355,9 @@ so they only ever match the suite's own window. The IPC suite likewise uses its 
 name and config file.
 
 `PEEKGUARD_MODE=alpha|move|hide` selects which hide strategy a suite certifies.
-`PEEKGUARD_DEBUG=1` turns on verbose logging to stderr and
-`%APPDATA%\PeekGuard\debug.log`. The remaining knobs are listed in
-[`tests/README.md`](tests/README.md).
+`PEEKGUARD_DEBUG=1` turns on verbose logging to stderr and `debug.log` in the platform
+config dir (`%APPDATA%\PeekGuard\` on Windows, `~/.config/peekguard/` on Linux). The
+remaining knobs are listed in [`tests/README.md`](tests/README.md).
 
 CI runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`,
 and `cargo build --release`. The end-to-end suites are **not** in CI: they move the real
@@ -326,10 +373,12 @@ can be checked line-by-line against the SDK headers.
 | File | Role |
 |---|---|
 | `src/win.rs` | hand-written Win32 FFI (zero deps, x86_64 only), including the registry |
+| `src/x11/` | hand-written X11 FFI and the Linux implementations: runtime `dlopen` of `libX11.so.6`; hide / picker / autostart / ipc |
+| `src/plat.rs` | platform dispatch (Windows → the `win`-based modules, Linux → `x11/`) |
 | `src/hide.rs` | hide primitives + state snapshot / lossless restore |
 | `src/watch.rs` | state machine: cursor polling, debounce, latch |
 | `src/rules.rs` | standing-rule scanner: rate limiting, target picking, per-window suppression |
-| `src/ipc.rs` | named-pipe IPC server (the uTools plugin / scripting interface) |
+| `src/ipc.rs` | IPC server (Windows named pipe; the Linux implementation is `src/x11/ipc.rs`) |
 | `src/config.rs` | config parsing + rule matching |
 | `src/autostart.rs` | run at login (HKCU Run directly, no subprocess) |
 | `src/session.rs` | crash-recovery journal |
@@ -390,26 +439,39 @@ Everything it writes is local, and the full list is here:
 
 | Path | What | When |
 |---|---|---|
-| `%APPDATA%\PeekGuard\peekguard.conf` | configuration | written on first run; overridable via `PEEKGUARD_CONFIG`, or a `peekguard.conf` placed next to the exe |
-| `%APPDATA%\PeekGuard\hidden.journal` | crash-recovery journal | only while windows are hidden; removed once they are restored |
-| `%APPDATA%\PeekGuard\debug.log` | diagnostic log | only when `PEEKGUARD_DEBUG=1` |
+| `%APPDATA%\PeekGuard\peekguard.conf` (Linux: `~/.config/peekguard/peekguard.conf`) | configuration | written on first run; overridable via `PEEKGUARD_CONFIG`, or a `peekguard.conf` placed next to the executable |
+| `hidden.journal` in the same directory | crash-recovery journal | only while windows are hidden; removed once they are restored |
+| `debug.log` in the same directory | diagnostic log | only when `PEEKGUARD_DEBUG=1` |
 
 The tray icon is generated at runtime and is never written to disk.
 
-The one system change PeekGuard can make is a `PeekGuard` value under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, and only after you opt in through
-the "start with Windows" tray item. Unticking that item deletes the value.
+The one system change PeekGuard can make is its run-at-login entry: on Windows a
+`PeekGuard` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, on Linux
+`~/.config/autostart/PeekGuard.desktop`. Either is created only after you opt in, and
+removed when you opt out.
 
-It never injects code, subclasses a window, or installs a global hook. The only
-cross-process calls it makes are `PROCESS_QUERY_LIMITED_INFORMATION`, used to read a
-window's process name for `rule = process:…` matching and to detect an elevated target.
+It never injects code, subclasses a window, or installs a global hook. On Windows the
+only cross-process calls it makes are `PROCESS_QUERY_LIMITED_INFORMATION`, used to read
+a window's process name for `rule = process:…` matching and to detect an elevated
+target; on Linux it reads process names from `/proc` and never touches the target
+process at all.
 
 ### Uninstallation
+
+Windows:
 
 1. Tray → quit
 2. If "start with Windows" is ticked, untick it — this removes the registry value
 3. Delete the exe
 4. Delete `%APPDATA%\PeekGuard\`
+
+Linux:
+
+1. Stop the peekguard process (windows are restored on exit)
+2. If autostart is on: IPC command `autostart off`, or delete
+   `~/.config/autostart/PeekGuard.desktop`
+3. Delete the binary
+4. Delete `~/.config/peekguard/`
 
 ## License
 

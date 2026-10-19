@@ -20,7 +20,7 @@
 //! restored.
 
 use crate::config::Config;
-use crate::win::*;
+use crate::plat::*;
 
 /// How often to look for new rule matches.
 ///
@@ -111,7 +111,7 @@ impl Scanner {
             return None;
         }
         self.purge();
-        let fg = unsafe { GetForegroundWindow() };
+        let fg = foreground_window();
         let own_pid = std::process::id();
         let mut best: Option<HWND> = None;
         for hwnd in top_level_windows() {
@@ -186,6 +186,19 @@ impl Default for Scanner {
 mod tests {
     use super::*;
 
+    /// Tests that walk real windows need a live X connection on Linux;
+    /// headless environments skip instead of failing.
+    fn open_display() -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            crate::x11::connect().is_ok()
+        }
+        #[cfg(windows)]
+        {
+            true
+        }
+    }
+
     #[test]
     fn muted_scanner_finds_nothing() {
         let mut s = Scanner::new();
@@ -241,6 +254,9 @@ mod tests {
 
     #[test]
     fn purge_drops_dead_handles() {
+        if !open_display() {
+            return;
+        }
         let mut s = Scanner::new();
         s.suppress(0xdead as HWND); // not a real window
         s.purge();
@@ -261,6 +277,9 @@ mod tests {
     /// healthy run.
     #[test]
     fn scan_costs_far_less_than_its_interval() {
+        if !open_display() {
+            return;
+        }
         let mut cfg = Config::default();
         // A process-only rule that matches nothing: every window is examined and
         // rejected, and rejection happens on the process name — the expensive
@@ -295,7 +314,7 @@ mod tests {
 
 #[cfg(test)]
 mod bench_parts {
-    use crate::win::*;
+    use crate::plat::*;
     use std::time::Instant;
 
     /// Diagnostic, not a test: measures where a scan spends its time and prints the

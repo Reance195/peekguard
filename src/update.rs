@@ -1,16 +1,19 @@
 //! Update check: ask GitHub for the latest release tag and compare it with the
 //! running version.
 //!
-//! Zero dependencies — a hand-written WinHTTP call, so the "nothing from
-//! crates.io" promise holds. This is the *only* network code in PeekGuard: a
-//! single unauthenticated GET to the public GitHub Releases API, carrying
-//! nothing about the machine or the user. It is opt-out via
-//! `check_update = false` in the config; see the README's privacy section.
+//! Zero dependencies — on Windows a hand-written WinHTTP call; on Linux the
+//! system `curl` binary. Either way the "nothing from crates.io" promise
+//! holds. This is the *only* network code in PeekGuard: a single
+//! unauthenticated GET to the public GitHub Releases API, carrying nothing
+//! about the machine or the user. It is opt-out via `check_update = false` in
+//! the config; see the README's privacy section.
 //!
 //! The call blocks on the network, so it must run on a background thread. The
 //! result is posted back to the UI thread by the caller (`main.rs`).
 
+#[cfg(windows)]
 use crate::win::*;
+#[cfg(windows)]
 use std::ffi::c_void;
 
 /// The running version, read straight from `Cargo.toml` so there is exactly one
@@ -135,6 +138,7 @@ fn json_string(body: &str, key: &str) -> Option<String> {
 // ------------------------------------------------------------- WinHTTP fetch
 
 /// GET the latest-release JSON. Blocking; bounded by [`WinHttpSetTimeouts`].
+#[cfg(windows)]
 fn fetch_latest() -> Result<String, String> {
     unsafe {
         let agent = to_wide(&format!("PeekGuard/{VERSION}"));
@@ -200,6 +204,38 @@ fn fetch_latest() -> Result<String, String> {
     }
 }
 
+// ------------------------------------------------------------- curl fetch (Linux)
+
+/// GET the latest-release JSON through the system `curl`. Blocking; bounded by
+/// `--max-time`. A missing curl is reported as a plain failure, so startup
+/// checks stay quiet and manual checks explain themselves.
+#[cfg(target_os = "linux")]
+fn fetch_latest() -> Result<String, String> {
+    let url = format!("https://{REPO_HOST}{REPO_LATEST_PATH}");
+    let out = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "--max-time",
+            "10",
+            "-A",
+            &format!("PeekGuard/{VERSION}"),
+            &url,
+        ])
+        .output()
+        .map_err(|e| format!("无法运行 curl（{e}）"))?;
+    if !out.status.success() {
+        return Err(match out.status.code() {
+            Some(c) => format!("curl 请求失败（退出码 {c}）"),
+            None => "curl 请求失败".to_string(),
+        });
+    }
+    if out.stdout.len() > MAX_BODY {
+        return Err("响应过大".to_string());
+    }
+    String::from_utf8(out.stdout).map_err(|_| "响应不是有效的 UTF-8".to_string())
+}
+
+#[cfg(windows)]
 unsafe fn query_status(request: HINTERNET) -> Option<u32> {
     let mut code: u32 = 0;
     let mut len: u32 = std::mem::size_of::<u32>() as u32;
@@ -218,6 +254,7 @@ unsafe fn query_status(request: HINTERNET) -> Option<u32> {
     }
 }
 
+#[cfg(windows)]
 unsafe fn read_body(request: HINTERNET) -> Result<String, String> {
     let mut out: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];

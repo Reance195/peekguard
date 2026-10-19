@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Linux (X11) support:** PeekGuard now runs on Linux desktops. The Win32 layer is
+  mirrored by a hand-written Xlib binding in `src/x11/` — loaded at runtime with
+  `dlopen("libX11.so.6")`, so the binary links nothing and needs no `-dev` packages —
+  while `src/plat.rs` forwards the shared vocabulary (window handles, rects, cursor,
+  window operations) to whichever platform is active. All three hide strategies carry
+  over (`_NET_WM_WINDOW_OPACITY`, `XMoveWindow`, `XUnmapWindow`; alpha mode detects a
+  missing compositor and is refused with a hint to pick another mode). There is no
+  tray on Linux: the same hotkeys apply, and a Unix domain socket
+  (`$XDG_RUNTIME_DIR/peekguard-ipc.sock`, mode 0600) serves the exact IPC protocol of
+  the Windows named pipe — `utools-plugin/test-cli.js` doubles as a cross-platform
+  client. Notifications go through `notify-send`, autostart is an XDG `.desktop` file,
+  the config lives in `~/.config/peekguard/`, and the update check shells out to the
+  system `curl`. `PEEKGUARD_PIPE` accepts a Unix socket path on Linux. Exercised
+  end-to-end under WSLg.
+
 - **uTools plugin:** [`utools-plugin/`](utools-plugin/) is a companion plugin that drives
   PeekGuard from uTools' search bar — a control panel (`防窥`), one-shot hide/restore
   (`隐身`) and a window-bind shortcut (`绑定窗口`). It remembers a manually chosen
@@ -24,10 +39,12 @@ All notable changes to this project are documented here. The format is based on
   windowless run is no longer silent. Any crash-recovery count and config note are
   folded into the same balloon.
 - **Embedded application icon:** the exe now carries a multi-size icon (16–128 px), generated at build time by `build.rs` from the same pure-Rust rasteriser the tray uses — no `.ico` file and no resource compiler. Explorer, the desktop shortcut and the taskbar now show the PeekGuard eye instead of the generic exe icon. (Exe grows to ~380 KB.)
-- **Update check:** PeekGuard can now tell you when a newer release exists. On startup, and on demand from the tray menu, it makes a single anonymous `GET` to the public GitHub Releases API and compares its version with the latest `tag_name`; if a newer one exists it shows a tray balloon that opens the release page in your browser. This is the program's only network code — written by hand against WinHTTP in `src/update.rs`, so the zero-dependency promise holds — and it is opt-out via `check_update = false`, which leaves the app fully offline. No machine or user information is sent.
+- **Update check:** PeekGuard can now tell you when a newer release exists. On startup, and on demand from the tray menu, it makes a single anonymous `GET` to the public GitHub Releases API and compares its version with the latest `tag_name`; if a newer one exists it shows a tray balloon that opens the release page in your browser. This is the program's only network code — a hand-written WinHTTP call on Windows and the system `curl` on Linux, so the zero-dependency promise holds on both — and it is opt-out via `check_update = false`, which leaves the app fully offline. No machine or user information is sent.
 
 ### Changed
 
+- **Restore guard:** restoring a hidden window (hotkey, IPC, or tray menu) while the cursor is away from it no longer lets the watcher re-hide it a tick later — auto-hide now stays suspended until the cursor has been back inside once, so a manual restore sticks.
+- **Window picker internals:** the picker's decision logic is now a pure, unit-tested function (first click after the grace period binds; right-click or Esc cancels).
 - **About dialog:** Replaced the plain system message box with a custom-painted About window that displays the app icon, version, hotkeys, and a clickable GitHub link. The window now scales with the monitor DPI.
 - **Window picker:** `Ctrl+Alt+P` and the tray "选择窗口并绑定…" item now open a crosshair picker. Move the cursor to highlight the target window's border, left-click to bind it, or right-click/Esc to cancel (no background dimming).
 - **Single version source:** the About window's version now comes from `Cargo.toml` via `env!("CARGO_PKG_VERSION")` instead of a hard-coded string, so bumping the manifest updates every surface at once.

@@ -8,10 +8,12 @@
 //! touched rather than after: see the comment in `hide::hide`. In short, the only
 //! unrecoverable state is "invisible with no journal entry", so the entry is always
 //! written first. Extra entries are harmless — replaying a visible window is a no-op.
+//!
+//! The journal line format itself is platform-specific and lives next to the
+//! hide implementation (`plat::hide::journal_line` / `from_journal_line`); this
+//! module only decides *when* to write and replay.
 
-use crate::config::HideMode;
-use crate::hide::{Hidden, Snapshot};
-use crate::win::*;
+use crate::plat::hide::{from_journal_line, Hidden};
 use std::sync::{Mutex, MutexGuard};
 
 /// What we believe is currently on disk, as (hwnd, mode) pairs.
@@ -50,23 +52,6 @@ fn journal_path() -> std::path::PathBuf {
     p
 }
 
-fn fmt_rect(r: &RECT) -> String {
-    format!("{},{},{},{}", r.left, r.top, r.right, r.bottom)
-}
-
-fn parse_rect(s: &str) -> Option<RECT> {
-    let v: Vec<i32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-    if v.len() != 4 {
-        return None;
-    }
-    Some(RECT {
-        left: v[0],
-        top: v[1],
-        right: v[2],
-        bottom: v[3],
-    })
-}
-
 /// Rewrite the journal with exactly the given set of hidden windows.
 pub fn write(hidden: &[Hidden]) {
     let sig = signature(hidden);
@@ -82,33 +67,13 @@ pub fn write(hidden: &[Hidden]) {
     } else {
         let mut out = String::new();
         for h in hidden {
-            let s = &h.snap;
-            out.push_str(&format!(
-                "hwnd={:#x} mode={} rect={} alpha={} layered={} exstyle={:#x} pid={} proc={}\n",
-                s.hwnd as usize,
-                h.mode.as_str(),
-                fmt_rect(&s.rect),
-                s.alpha
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|| "none".into()),
-                if s.was_layered { 1 } else { 0 },
-                s.ex_style,
-                process_id(s.hwnd),
-                process_name(process_id(s.hwnd)),
-            ));
+            out.push_str(&h.journal_line());
         }
         std::fs::write(path, out)
     };
     if result.is_ok() {
         *last_written() = Some(sig);
     }
-}
-
-fn get<'a>(fields: &'a [(&str, String)], key: &str) -> Option<&'a str> {
-    fields
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, v)| v.as_str())
 }
 
 /// Restore anything left over from a previous run. Returns how many were fixed.
@@ -125,57 +90,10 @@ pub fn replay() -> usize {
         if line.is_empty() {
             continue;
         }
-        let mut fields: Vec<(&str, String)> = Vec::new();
-        for part in line.split_whitespace() {
-            if let Some((k, v)) = part.split_once('=') {
-                fields.push((k, v.to_string()));
-            }
+        if let Some(hidden) = from_journal_line(line) {
+            hidden.revert();
+            fixed += 1;
         }
-        let Some(hwnd_str) = get(&fields, "hwnd") else {
-            continue;
-        };
-        let Ok(raw) = usize::from_str_radix(hwnd_str.trim_start_matches("0x"), 16) else {
-            continue;
-        };
-        let hwnd = raw as HWND;
-        if !is_valid(hwnd) {
-            continue; // window is gone; nothing to do
-        }
-        // If the process restarted, the HWND may have been recycled: check the pid.
-        if let (Some(pid_s), Some(proc_s)) = (get(&fields, "pid"), get(&fields, "proc")) {
-            if let Ok(pid) = pid_s.parse::<u32>() {
-                let actual = process_id(hwnd);
-                let actual_name = process_name(actual);
-                if actual != pid && !actual_name.eq_ignore_ascii_case(proc_s) {
-                    continue;
-                }
-            }
-        }
-        let mode = get(&fields, "mode")
-            .and_then(HideMode::parse)
-            .unwrap_or(HideMode::Alpha);
-        let rect = get(&fields, "rect")
-            .and_then(parse_rect)
-            .unwrap_or_else(|| window_rect(hwnd));
-        let alpha = get(&fields, "alpha").and_then(|v| v.parse::<u8>().ok());
-        let was_layered = get(&fields, "layered").map(|v| v == "1").unwrap_or(false);
-        let ex_style = get(&fields, "exstyle")
-            .and_then(|v| isize::from_str_radix(v.trim_start_matches("0x"), 16).ok())
-            .unwrap_or_else(|| ex_style(hwnd));
-
-        let hidden = Hidden {
-            mode,
-            snap: Snapshot {
-                hwnd,
-                rect,
-                alpha,
-                was_layered,
-                ex_style,
-                was_minimized: false,
-            },
-        };
-        hidden.revert();
-        fixed += 1;
     }
     let _ = std::fs::remove_file(&path);
     fixed
