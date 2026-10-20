@@ -193,7 +193,7 @@ mod tests {
         {
             crate::x11::connect().is_ok()
         }
-        #[cfg(windows)]
+        #[cfg(not(target_os = "linux"))]
         {
             true
         }

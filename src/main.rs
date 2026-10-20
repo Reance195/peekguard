@@ -1,11 +1,12 @@
 //! PeekGuard — bind any window, hide it when the mouse leaves, restore on return.
 //!
-//! Zero dependencies. Single binary: Windows (Win32) and Linux (X11).
+//! Zero dependencies. Single binary: Windows (Win32), Linux (X11) and
+//! macOS (CoreGraphics + Accessibility).
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-// Windows-only subsystems. The Linux equivalents live in `x11/` and reach the
-// shared code through the `plat` adapter.
+// Windows-only subsystems. The Linux/macOS equivalents live in `x11/` and
+// `macos/` and reach the shared code through the `plat` adapter.
 #[cfg(windows)]
 mod about;
 #[cfg(windows)]
@@ -29,10 +30,16 @@ mod watch;
 #[cfg(windows)]
 mod win;
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(not(windows))]
+mod uds_ipc;
 #[cfg(target_os = "linux")]
 mod x11;
 
 use config::{Config, HideMode, Rule};
+#[cfg(target_os = "macos")]
+use macos::*;
 #[cfg(windows)]
 use tray::*;
 use watch::{State, Watcher};
@@ -41,11 +48,12 @@ use win::*;
 #[cfg(target_os = "linux")]
 use x11::*;
 
-// Both platform flavors answer to the same name for the JSON helpers; on
-// Windows `ipc` is the module declared above, here it aliases the x11 one. The
-// transport behind it (named pipe vs unix socket) is what differs.
-#[cfg(target_os = "linux")]
-use crate::x11::ipc;
+// Both flavors answer to the same name for the JSON helpers; on Windows `ipc`
+// is the named-pipe module declared above, here it aliases the shared Unix
+// domain socket transport (Linux and macOS). What differs is only the plumb
+// job of moving lines across the process boundary.
+#[cfg(not(windows))]
+use crate::uds_ipc as ipc;
 
 #[cfg(windows)]
 const CLASS_NAME: &str = "PeekGuard.MessageWindow.v1";
@@ -127,8 +135,8 @@ macro_rules! dbgmsg {
 fn main() {
     #[cfg(windows)]
     run_windows();
-    #[cfg(target_os = "linux")]
-    run_linux();
+    #[cfg(not(windows))]
+    run_desktop();
 }
 
 /// Windows entry point: message window, tray icon, hotkeys, message loop.
@@ -240,14 +248,14 @@ fn run_windows() {
     message_loop();
 }
 
-/// Linux entry point: no window, no tray. The tool is driven by the global
-/// hotkeys and by IPC (scripts, the uTools plugin), and reports through
+/// macOS/Linux entry point: no window, no tray. The tool is driven by the
+/// global hotkeys and by IPC (scripts, the uTools plugin), and reports through
 /// desktop notifications.
-#[cfg(target_os = "linux")]
-fn run_linux() {
-    // The X connection must come up before anything else: every helper in
-    // `x11` talks through the display handle.
-    if let Err(e) = x11::connect() {
+#[cfg(not(windows))]
+fn run_desktop() {
+    // The connection to the window server must come up before anything else:
+    // every helper in `x11`/`macos` talks through that handle.
+    if let Err(e) = crate::plat::connect() {
         eprintln!("[peekguard] {e}");
         std::process::exit(1);
     }
@@ -259,7 +267,7 @@ fn run_linux() {
     // Single instance: a second copy would fight over the same windows.
     // `PEEKGUARD_MUTEX` lets the end-to-end suites name their own lock file
     // and get a genuinely independent instance.
-    let _lock = match x11::acquire_single_instance() {
+    let _lock = match crate::plat::acquire_single_instance() {
         Ok(lock) => lock,
         Err(e) => {
             if std::env::var("PEEKGUARD_MUTEX").is_err() {
@@ -287,7 +295,7 @@ fn run_linux() {
     // Serve local IPC for scripts and the uTools plugin. Best-effort: a
     // failure to bind the socket leaves hotkeys working on their own.
     ipc::start();
-    x11::install_signal_handlers();
+    crate::plat::install_signal_handlers();
 
     maybe_arm_test_panic();
 
@@ -321,13 +329,15 @@ fn run_linux() {
     main_loop();
 }
 
-/// The Linux main loop: a fixed 16 ms tick plus three polled inputs -- IPC
-/// requests, global hotkeys (XQueryKeymap) and the pointer (via `on_tick`).
-/// There is no X event loop by design: every input is queried, none pushed.
-#[cfg(target_os = "linux")]
+/// The macOS/Linux main loop: a fixed 16 ms tick plus three polled inputs --
+/// IPC requests, global hotkeys and the pointer (via `on_tick`). On Linux the
+/// hotkeys come from polling XQueryKeymap and the pointer from XQueryPointer;
+/// on macOS a Carbon event-handler thread sets hotkey flags and CGEvent
+/// queries read the pointer. Either way an input is queried, never pushed.
+#[cfg(not(windows))]
 fn main_loop() {
-    let mut hotkeys = x11::Hotkeys::new();
-    let mut next = x11::tick_ms();
+    let mut hotkeys = crate::plat::Hotkeys::new();
+    let mut next = crate::plat::tick_ms();
     loop {
         // Serve waiting IPC clients first: a script or the plugin should
         // never wait a full tick for an answer.
@@ -335,15 +345,15 @@ fn main_loop() {
         poll_update_result();
 
         match hotkeys.poll() {
-            Some(x11::Hotkey::Bind) => toggle_bind(),
-            Some(x11::Hotkey::Toggle) => toggle_hide(),
-            Some(x11::Hotkey::Latch) => toggle_latch(),
+            Some(crate::plat::Hotkey::Bind) => toggle_bind(),
+            Some(crate::plat::Hotkey::Toggle) => toggle_hide(),
+            Some(crate::plat::Hotkey::Latch) => toggle_latch(),
             None => {}
         }
 
         on_tick();
 
-        let sig = x11::pending_signal();
+        let sig = crate::plat::pending_signal();
         if sig != 0 {
             dbgmsg!("signal {} received, shutting down", sig);
             shutdown();
@@ -353,7 +363,7 @@ fn main_loop() {
         // Fixed cadence with drift correction. Falling behind (a slow tick,
         // a burst of IPC) resyncs instead of bursting to catch up.
         next += TICK_MS as u64;
-        let now = x11::tick_ms();
+        let now = crate::plat::tick_ms();
         if next > now {
             std::thread::sleep(std::time::Duration::from_millis(next - now));
         } else {
@@ -684,7 +694,7 @@ fn on_tick() {
         }
         #[cfg(windows)]
         notify("这个窗口拒绝被隐身（可能是管理员权限窗口）——已停止保护它。");
-        #[cfg(target_os = "linux")]
+        #[cfg(not(windows))]
         notify("无法隐身这个窗口（试试换一种隐身方式）——已停止保护它。");
         session::write(&[]);
         update_tray();
@@ -898,7 +908,7 @@ fn set_mode(mode: HideMode) {
     update_tray();
 }
 
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 fn adjust_delay(delta: i64) {
     let a = app();
     let v = (a.watcher.cfg.delay_ms as i64 + delta).clamp(0, 5_000) as u64;
@@ -908,7 +918,7 @@ fn adjust_delay(delta: i64) {
     update_tray();
 }
 
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 fn save_rule() {
     let a = app();
     let Some(t) = a.watcher.target.clone() else {
@@ -968,7 +978,7 @@ fn reload_config() {
     update_tray();
 }
 
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 fn open_config() {
     let path = Config::config_path();
     let _ = Config::load();
@@ -980,8 +990,8 @@ fn open_config() {
             .spawn()
             .ok();
     }
-    #[cfg(target_os = "linux")]
-    x11::open_external(&p);
+    #[cfg(not(windows))]
+    crate::plat::open_external(&p);
     notify(&format!("配置文件: {p}"));
 }
 
@@ -1030,13 +1040,13 @@ fn start_update_check(manual: bool) {
     });
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 static UPDATE_RX: std::sync::Mutex<Option<std::sync::mpsc::Receiver<(bool, update::CheckResult)>>> =
     std::sync::Mutex::new(None);
 
-/// Linux flavor: the worker hands its result back over a channel that the
+/// Unix flavor: the worker hands its result back over a channel that the
 /// main loop drains every tick.
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 fn start_update_check(manual: bool) {
     let a = app();
     if a.update_checking {
@@ -1059,8 +1069,8 @@ fn start_update_check(manual: bool) {
     });
 }
 
-/// Drain finished checks queued by the update thread (Linux main loop).
-#[cfg(target_os = "linux")]
+/// Drain finished checks queued by the update thread (Unix main loop).
+#[cfg(not(windows))]
 fn poll_update_result() {
     let guard = UPDATE_RX.lock().unwrap_or_else(|e| e.into_inner());
     let Some(rx) = guard.as_ref() else { return };
@@ -1082,7 +1092,7 @@ fn on_update_result(manual: bool, result: update::CheckResult) {
                 "发现新版本 {} —— 右键托盘图标选“下载新版本”，或点一下本提示。",
                 info.version
             ));
-            #[cfg(target_os = "linux")]
+            #[cfg(not(windows))]
             notify(&format!(
                 "发现新版本 {} —— 请到 GitHub Releases 页面下载更新。",
                 info.version
@@ -1105,7 +1115,7 @@ fn on_update_result(manual: bool, result: update::CheckResult) {
 }
 
 /// Turn the startup check on or off, and persist the choice.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 fn toggle_update_check() {
     let a = app();
     a.watcher.cfg.check_update = !a.watcher.cfg.check_update;
@@ -1121,7 +1131,7 @@ fn toggle_update_check() {
 
 /// Open the release page for the newer version. If none is known yet, run a
 /// check instead of opening something arbitrary.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 fn open_update_page() {
     let a = app();
     match a.update_available.as_ref() {
@@ -1150,10 +1160,10 @@ fn open_url(url: &str) {
     }
 }
 
-/// Linux opens links through `xdg-open`.
-#[cfg(target_os = "linux")]
+/// macOS/Linux open links through the desktop's default handler.
+#[cfg(not(windows))]
 fn open_url(url: &str) {
-    x11::open_external(url);
+    crate::plat::open_external(url);
 }
 
 #[cfg(windows)]
@@ -1172,9 +1182,9 @@ fn update_tray() {
     }
 }
 
-/// Linux has no tray, so there is no tooltip to keep current; state gets out
-/// through notifications and the IPC `status` command.
-#[cfg(target_os = "linux")]
+/// macOS/Linux have no tray, so there is no tooltip to keep current; state
+/// gets out through notifications and the IPC `status` command.
+#[cfg(not(windows))]
 fn update_tray() {}
 
 // ---------------------------------------------------------------- helpers
@@ -1209,10 +1219,11 @@ fn notify(text: &str) {
     eprintln!("[peekguard] {text}");
 }
 
-/// Linux raises a desktop notification through `notify-send` (plus stderr).
-#[cfg(target_os = "linux")]
+/// macOS/Linux raise a desktop notification through the platform helper
+/// (`osascript` on macOS, `notify-send` on Linux) plus stderr.
+#[cfg(not(windows))]
 fn notify(text: &str) {
-    x11::notify(text);
+    crate::plat::notify(text);
 }
 
 /// All visible top-level windows with a title, used for rule autobind.

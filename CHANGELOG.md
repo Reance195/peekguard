@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **macOS support:** PeekGuard now runs on macOS (Apple silicon). Window control is a
+  hand-written CoreGraphics + Accessibility binding in `src/macos/`: reads (geometry,
+  owners, process names) come from `CGWindowListCopyWindowInfo` and work without any
+  grant, while moves and minimizes go through the Accessibility API (System Settings →
+  Privacy & Security → Accessibility — requested on first run). Two hide strategies
+  carry over — `move` (AX position, parked off the virtual screen) and `hide` (AX
+  minimize); there is no public cross-app transparency API, so alpha mode is not
+  offered on this platform. Global hotkeys are `Cmd+Option+P/H/L` (Carbon
+  `RegisterEventHotKey`, no extra grant needed). There is no tray here either: the
+  Unix-socket IPC applies — the transport moved to `src/uds_ipc.rs`, shared with the
+  Linux port (`$XDG_RUNTIME_DIR` → `TMPDIR` → `/tmp`) — notifications go through
+  `osascript`, autostart is a `~/Library/LaunchAgents` plist, the config lives in
+  `~/Library/Application Support/PeekGuard/`, and the update check uses the system
+  `curl`. Syntax-checked with `cargo check --target aarch64-apple-darwin` and
+  clippy-clean; not yet exercised on real hardware.
+
 - **Linux (X11) support:** PeekGuard now runs on Linux desktops. The Win32 layer is
   mirrored by a hand-written Xlib binding in `src/x11/` — loaded at runtime with
   `dlopen("libX11.so.6")`, so the binary links nothing and needs no `-dev` packages —

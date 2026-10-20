@@ -1,5 +1,5 @@
-//! Unix domain socket IPC server for Linux — the counterpart of the Windows
-//! named pipe in `src/ipc.rs`.
+//! Unix domain socket IPC server for Linux and macOS — the counterpart of the
+//! Windows named pipe in `src/ipc.rs`.
 //!
 //! Protocol is identical to Windows: one line of text goes in, one line of
 //! JSON comes out. The listener runs on a background thread; requests are
@@ -45,7 +45,8 @@ pub fn err_json(msg: &str) -> String {
 
 /// Resolve the socket path. `PEEKGUARD_PIPE` may name an absolute path (used
 /// as-is) or a bare name (placed in the runtime dir); the default is a
-/// per-user socket in `XDG_RUNTIME_DIR` (or `/tmp` as a fallback).
+/// per-user socket in the runtime dir (`$XDG_RUNTIME_DIR` on Linux, `/tmp`
+/// fallback).
 fn socket_path() -> PathBuf {
     match std::env::var("PEEKGUARD_PIPE") {
         Ok(v) if !v.trim().is_empty() => {
@@ -53,10 +54,10 @@ fn socket_path() -> PathBuf {
             if v.starts_with('/') {
                 PathBuf::from(v)
             } else {
-                super::runtime_dir().join(format!("{v}.sock"))
+                crate::plat::runtime_dir().join(format!("{v}.sock"))
             }
         }
-        _ => super::runtime_dir().join("peekguard-ipc.sock"),
+        _ => crate::plat::runtime_dir().join("peekguard-ipc.sock"),
     }
 }
 

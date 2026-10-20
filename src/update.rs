@@ -204,12 +204,12 @@ fn fetch_latest() -> Result<String, String> {
     }
 }
 
-// ------------------------------------------------------------- curl fetch (Linux)
+// ------------------------------------------------------------- curl fetch (macOS/Linux)
 
 /// GET the latest-release JSON through the system `curl`. Blocking; bounded by
 /// `--max-time`. A missing curl is reported as a plain failure, so startup
 /// checks stay quiet and manual checks explain themselves.
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 fn fetch_latest() -> Result<String, String> {
     let url = format!("https://{REPO_HOST}{REPO_LATEST_PATH}");
     let out = std::process::Command::new("curl")

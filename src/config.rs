@@ -224,6 +224,17 @@ impl Config {
         PathBuf::from(home).join(".config").join("peekguard")
     }
 
+    /// macOS keeps the config in Application Support, where the platform
+    /// expects app data to live.
+    #[cfg(target_os = "macos")]
+    pub fn config_dir() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("PeekGuard")
+    }
+
     pub fn config_path() -> PathBuf {
         if let Ok(p) = std::env::var("PEEKGUARD_CONFIG") {
             if !p.trim().is_empty() {
