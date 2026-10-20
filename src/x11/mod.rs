@@ -840,23 +840,45 @@ const XK_SHIFT_R: c_ulong = 0xFFE2;
 const XK_SUPER_L: c_ulong = 0xFFEB;
 const XK_SUPER_R: c_ulong = 0xFFEC;
 
+/// One snapshot of the global keyboard bitmap.
+///
+/// `XQueryKeymap` is a server round-trip, and the old per-key `key_down` calls
+/// paid for it up to fifteen times per tick (five lookups for each of three
+/// chords). Reading it once and evaluating every chord against the same
+/// snapshot cuts that to a single round-trip per tick.
+struct KeyState([c_char; 32]);
+
+impl KeyState {
+    fn read() -> KeyState {
+        let mut keys = [0 as c_char; 32];
+        if let Ok(x) = lib() {
+            unsafe {
+                (x.XQueryKeymap)(dpy(), keys.as_mut_ptr());
+            }
+        }
+        KeyState(keys)
+    }
+
+    fn down(&self, keysym: c_ulong) -> bool {
+        let Ok(x) = lib() else {
+            return false;
+        };
+        unsafe {
+            let kc = (x.XKeysymToKeycode)(dpy(), keysym);
+            if kc == 0 {
+                return false;
+            }
+            let byte = (kc / 8) as usize;
+            let bit = kc % 8;
+            (self.0[byte] as u8) & (1u8 << bit) != 0
+        }
+    }
+}
+
 /// Is the key carrying this keysym currently held down? Reads the global
 /// keyboard bitmap (32 bytes of state, not events); nothing is recorded.
 pub(crate) fn key_down(keysym: c_ulong) -> bool {
-    let Ok(x) = lib() else {
-        return false;
-    };
-    unsafe {
-        let kc = (x.XKeysymToKeycode)(dpy(), keysym);
-        if kc == 0 {
-            return false;
-        }
-        let mut keys = [0 as c_char; 32];
-        (x.XQueryKeymap)(dpy(), keys.as_mut_ptr());
-        let byte = (kc / 8) as usize;
-        let bit = kc % 8;
-        (keys[byte] as u8) & (1u8 << bit) != 0
-    }
+    KeyState::read().down(keysym)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -877,12 +899,12 @@ fn keysym_of(key: crate::hotkey::Key) -> c_ulong {
     }
 }
 
-fn combo_down(c: &crate::hotkey::Combo) -> bool {
-    (!c.ctrl || key_down(XK_CONTROL_L) || key_down(XK_CONTROL_R))
-        && (!c.alt || key_down(XK_ALT_L) || key_down(XK_ALT_R))
-        && (!c.shift || key_down(XK_SHIFT_L) || key_down(XK_SHIFT_R))
-        && (!c.meta || key_down(XK_SUPER_L) || key_down(XK_SUPER_R))
-        && key_down(keysym_of(c.key))
+fn combo_down(keys: &KeyState, c: &crate::hotkey::Combo) -> bool {
+    (!c.ctrl || keys.down(XK_CONTROL_L) || keys.down(XK_CONTROL_R))
+        && (!c.alt || keys.down(XK_ALT_L) || keys.down(XK_ALT_R))
+        && (!c.shift || keys.down(XK_SHIFT_L) || keys.down(XK_SHIFT_R))
+        && (!c.meta || keys.down(XK_SUPER_L) || keys.down(XK_SUPER_R))
+        && keys.down(keysym_of(c.key))
 }
 
 /// Edge detector for the configured combos. Polled once per tick; fills the
@@ -902,10 +924,11 @@ impl Hotkeys {
     }
 
     pub fn poll(&mut self) -> Option<Hotkey> {
+        let keys = KeyState::read();
         let now = [
-            combo_down(&self.combos[0]),
-            combo_down(&self.combos[1]),
-            combo_down(&self.combos[2]),
+            combo_down(&keys, &self.combos[0]),
+            combo_down(&keys, &self.combos[1]),
+            combo_down(&keys, &self.combos[2]),
         ];
         let mut out = None;
         for (i, &down) in now.iter().enumerate() {

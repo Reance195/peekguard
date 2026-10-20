@@ -59,6 +59,10 @@ use crate::uds_ipc as ipc;
 #[cfg(windows)]
 const CLASS_NAME: &str = "PeekGuard.MessageWindow.v1";
 const TICK_MS: u32 = 16; // 62 Hz cursor polling: invisible CPU cost, no felt lag
+/// With nothing bound there is no cursor to track; the tick only feeds IPC,
+/// hotkey polling and the 1 Hz rule scan. Backing off to ~30 Hz halves idle
+/// wakeups while still sampling a hotkey tap many times during a normal press.
+const IDLE_TICK_MS: u32 = 33;
 
 #[cfg(windows)]
 const HOTKEY_BIND: i32 = 1;
@@ -94,6 +98,20 @@ static mut APP: *mut App = std::ptr::null_mut();
 
 fn app() -> &'static mut App {
     unsafe { &mut *APP }
+}
+
+/// How often the loop should wake right now.
+///
+/// A bound window or an open picker needs the fine cadence so the leave
+/// debounce and the picker crosshair stay responsive. Otherwise the tick is
+/// only housekeeping and can back off; see `IDLE_TICK_MS`.
+fn tick_interval_ms() -> u32 {
+    let a = app();
+    if a.picker.is_some() || a.watcher.target.is_some() {
+        TICK_MS
+    } else {
+        IDLE_TICK_MS
+    }
 }
 
 /// Diagnostic log. Enable with PEEKGUARD_DEBUG=1; writes to stderr and to
@@ -332,7 +350,7 @@ fn run_desktop() {
     main_loop();
 }
 
-/// The macOS/Linux main loop: a fixed 16 ms tick plus three polled inputs --
+/// The macOS/Linux main loop: an adaptive tick plus three polled inputs --
 /// IPC requests, global hotkeys and the pointer (via `on_tick`). On Linux the
 /// hotkeys come from polling XQueryKeymap and the pointer from XQueryPointer;
 /// on macOS a Carbon event-handler thread sets hotkey flags and CGEvent
@@ -369,14 +387,15 @@ fn main_loop() {
             return;
         }
 
-        // Fixed cadence with drift correction. Falling behind (a slow tick,
+        // Adaptive cadence with drift correction. Falling behind (a slow tick,
         // a burst of IPC) resyncs instead of bursting to catch up.
-        next += TICK_MS as u64;
+        let interval = tick_interval_ms() as u64;
+        next += interval;
         let now = crate::plat::tick_ms();
         if next > now {
             std::thread::sleep(std::time::Duration::from_millis(next - now));
         } else {
-            next = now + TICK_MS as u64;
+            next = now + interval;
         }
     }
 }
@@ -501,9 +520,25 @@ fn shutdown() {
 
 // ---------------------------------------------------------------- window proc
 
+/// Keep the timer in step with what the tick currently costs. `SetTimer` with
+/// the same id replaces the pending timer, which is what we want: the new
+/// cadence takes effect from now instead of after one stale interval.
+#[cfg(windows)]
+fn retime(hwnd: HWND) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CURRENT: AtomicU32 = AtomicU32::new(TICK_MS);
+    let want = tick_interval_ms();
+    if want != CURRENT.load(Ordering::Relaxed) {
+        CURRENT.store(want, Ordering::Relaxed);
+        unsafe {
+            SetTimer(hwnd, 1, want, std::ptr::null());
+        }
+    }
+}
+
 #[cfg(windows)]
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
-    match msg {
+    let result = match msg {
         WM_TIMER => {
             on_tick();
             0
@@ -558,7 +593,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             0
         }
         _ => DefWindowProcW(hwnd, msg, w, l),
-    }
+    };
+    // Any message can have changed what the tick costs (bind/unbind, picker
+    // opened or closed, latch flipped from the tray or IPC). Re-evaluate once
+    // per message; `retime` only touches the timer when the cadence changed.
+    retime(hwnd);
+    result
 }
 
 #[cfg(windows)]
