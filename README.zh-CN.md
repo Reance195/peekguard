@@ -101,6 +101,9 @@ macOS 版的行为与 Windows/Linux 一致：绑定窗口、鼠标离开自动�
 | 立即隐身 / 恢复 | `Ctrl+Alt+H` |
 | 切换锁存模式 | `Ctrl+Alt+L` |
 
+三个快捷键都可以改：在 uTools 面板里点一下快捷键即可重新录制（Esc 取消），
+或改配置文件里的 `hotkey_bind` / `hotkey_toggle` / `hotkey_latch` 后重载。
+
 Windows 托盘图标（Linux 与 macOS 没有托盘，用热键与 IPC 代替）：
 
 - **双击** = 选择并绑定窗口（十字光标选择器）
@@ -228,6 +231,11 @@ skip_minimized = true
 # true = 启动时向 GitHub 查询新版本。这是 PeekGuard 唯一的联网行为；
 # 设为 false 则完全不联网。
 check_update = true
+
+# 全局快捷键（修饰键 Ctrl/Alt/Shift/Win，主键 A-Z、0-9、F1-F12）
+hotkey_bind = Ctrl+Alt+P
+hotkey_toggle = Ctrl+Alt+H
+hotkey_latch = Ctrl+Alt+L
 
 # 启动时自动绑定的窗口（可留空）
 autobind =

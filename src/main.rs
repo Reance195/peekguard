@@ -14,6 +14,7 @@ mod autostart;
 mod config;
 #[cfg(windows)]
 mod hide;
+mod hotkey;
 #[cfg(windows)]
 mod icon;
 #[cfg(windows)]
@@ -204,7 +205,9 @@ fn run_windows() {
         .unwrap_or_else(icon::stock_icon);
     app().tray = Some(Tray::add(hwnd, hicon, "PeekGuard — 未绑定"));
 
-    register_hotkeys(hwnd);
+    if let Err(e) = crate::plat::apply_hotkeys(hwnd, &app().watcher.cfg) {
+        notify(&e);
+    }
     // Serve local IPC for scripts and the uTools plugin. Best-effort: if the
     // pipe cannot be created the tray keeps working with hotkeys alone.
     ipc::spawn(hwnd);
@@ -336,13 +339,19 @@ fn run_desktop() {
 /// queries read the pointer. Either way an input is queried, never pushed.
 #[cfg(not(windows))]
 fn main_loop() {
-    let mut hotkeys = crate::plat::Hotkeys::new();
+    let mut hotkeys = crate::plat::Hotkeys::new(&app().watcher.cfg);
     let mut next = crate::plat::tick_ms();
     loop {
         // Serve waiting IPC clients first: a script or the plugin should
         // never wait a full tick for an answer.
         ipc::drain(ipc_command);
         poll_update_result();
+
+        // A `hotkey` edit raised the flag; rebuild the polling table so the
+        // new combination is live immediately.
+        if crate::hotkey::take_reload() {
+            hotkeys = crate::plat::Hotkeys::new(&app().watcher.cfg);
+        }
 
         match hotkeys.poll() {
             Some(crate::plat::Hotkey::Bind) => toggle_bind(),
@@ -453,37 +462,6 @@ fn apply_autobind() {
             a.watcher.bind(hwnd);
             return;
         }
-    }
-}
-
-#[cfg(windows)]
-fn register_hotkeys(hwnd: HWND) {
-    unsafe {
-        let a = RegisterHotKey(
-            hwnd,
-            HOTKEY_BIND,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            'P' as u32,
-        );
-        let b = RegisterHotKey(
-            hwnd,
-            HOTKEY_TOGGLE,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            'H' as u32,
-        );
-        let c = RegisterHotKey(
-            hwnd,
-            HOTKEY_LATCH,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            'L' as u32,
-        );
-        dbgmsg!(
-            "hotkeys registered: bind={} toggle={} latch={} err={}",
-            a,
-            b,
-            c,
-            GetLastError()
-        );
     }
 }
 
@@ -775,7 +753,10 @@ fn bind_window(h: HWND) {
 fn toggle_hide() {
     let a = app();
     if a.watcher.target.is_none() {
-        notify("先绑定一个窗口（Ctrl+Alt+P）。");
+        notify(&format!(
+            "先绑定一个窗口（{}）。",
+            a.watcher.cfg.hotkey_bind
+        ));
         return;
     }
     if a.watcher.hidden.is_some() {
@@ -828,6 +809,9 @@ fn menu_state() -> MenuState {
         autostart: plat::autostart::enabled(),
         check_update: a.watcher.cfg.check_update,
         update_available: a.update_available.as_ref().map(|i| i.version.clone()),
+        hotkey_bind: a.watcher.cfg.hotkey_bind.clone(),
+        hotkey_toggle: a.watcher.cfg.hotkey_toggle.clone(),
+        hotkey_latch: a.watcher.cfg.hotkey_latch.clone(),
     }
 }
 
@@ -998,7 +982,14 @@ fn open_config() {
 #[cfg(windows)]
 fn about() {
     let a = app();
-    about::show(a.hwnd);
+    about::show(
+        a.hwnd,
+        [
+            a.watcher.cfg.hotkey_bind.clone(),
+            a.watcher.cfg.hotkey_toggle.clone(),
+            a.watcher.cfg.hotkey_latch.clone(),
+        ],
+    );
 }
 
 // ---------------------------------------------------------------- update check
@@ -1238,7 +1229,8 @@ fn top_level_windows() -> Vec<HWND> {
 ///
 /// Commands: `status`, `hide`, `show`, `toggle`, `bind`, `unbind`,
 /// `latch on|off|toggle`, `mode alpha|move|hide`, `scan on|off|toggle`,
-/// `reload`, `autostart on|off|toggle`. There is deliberately no `quit`.
+/// `reload`, `autostart on|off|toggle`, `hotkey bind|toggle|latch <组合>`.
+/// There is deliberately no `quit`.
 pub(crate) fn ipc_command(line: &str) -> String {
     let mut parts = line.split_whitespace();
     let verb = parts.next().unwrap_or("").to_ascii_lowercase();
@@ -1354,9 +1346,75 @@ pub(crate) fn ipc_command(line: &str) -> String {
                 Err(e) => ipc_err(&e),
             }
         }
+        "hotkey" => {
+            let rest: String = parts.collect::<Vec<_>>().concat();
+            if arg.is_empty() || rest.is_empty() {
+                return ipc_err(
+                    "用法: hotkey bind|toggle|latch <组合>，例如 hotkey bind Ctrl+Alt+K",
+                );
+            }
+            match set_hotkey(&arg, &rest) {
+                Ok(msg) => ipc_ok(&msg),
+                Err(e) => ipc_err(&e),
+            }
+        }
         "" => ipc_err("空命令"),
         other => ipc_err(&format!("未知命令: {other}")),
     }
+}
+
+/// Read one hotkey slot by its config key.
+fn hotkey_slot<'a>(cfg: &'a Config, field: &str) -> &'a str {
+    match field {
+        "hotkey_bind" => &cfg.hotkey_bind,
+        "hotkey_toggle" => &cfg.hotkey_toggle,
+        _ => &cfg.hotkey_latch,
+    }
+}
+
+/// Write one hotkey slot by its config key.
+fn hotkey_slot_mut<'a>(cfg: &'a mut Config, field: &str) -> &'a mut String {
+    match field {
+        "hotkey_bind" => &mut cfg.hotkey_bind,
+        "hotkey_toggle" => &mut cfg.hotkey_toggle,
+        _ => &mut cfg.hotkey_latch,
+    }
+}
+
+/// Change one global hotkey, persist it, and apply it immediately. On failure
+/// the previous combination is restored, so a typo never leaves the user
+/// without a working hotkey.
+fn set_hotkey(action: &str, text: &str) -> Result<String, String> {
+    let combo = crate::hotkey::parse(text)?;
+    let field = match action {
+        "bind" => "hotkey_bind",
+        "toggle" => "hotkey_toggle",
+        "latch" => "hotkey_latch",
+        _ => return Err("用法: hotkey bind|toggle|latch <组合>".to_string()),
+    };
+    let label = match field {
+        "hotkey_bind" => "绑定窗口",
+        "hotkey_toggle" => "隐身/恢复",
+        _ => "锁存",
+    };
+    let a = app();
+    let taken = ["hotkey_bind", "hotkey_toggle", "hotkey_latch"]
+        .iter()
+        .filter(|f| **f != field)
+        .any(|f| crate::hotkey::parse(hotkey_slot(&a.watcher.cfg, f)).is_ok_and(|c| c == combo));
+    if taken {
+        return Err(format!("{combo} 已被另一个快捷键占用"));
+    }
+    let old = hotkey_slot(&a.watcher.cfg, field).to_string();
+    *hotkey_slot_mut(&mut a.watcher.cfg, field) = combo.to_string();
+    let cfg = a.watcher.cfg.clone();
+    if let Err(e) = crate::plat::apply_hotkeys(a.hwnd, &cfg) {
+        *hotkey_slot_mut(&mut a.watcher.cfg, field) = old;
+        let _ = crate::plat::apply_hotkeys(a.hwnd, &a.watcher.cfg);
+        return Err(e);
+    }
+    let _ = a.watcher.cfg.save();
+    Ok(format!("快捷键 {label} 已改为 {combo}"))
 }
 
 /// Hide the bound window right now. Same behavior as the hotkey path, but the
@@ -1365,7 +1423,7 @@ pub(crate) fn ipc_command(line: &str) -> String {
 fn force_hide() -> Result<String, String> {
     let a = app();
     if a.watcher.target.is_none() {
-        return Err("先绑定一个窗口（Ctrl+Alt+P）".to_string());
+        return Err(format!("先绑定一个窗口（{}）", a.watcher.cfg.hotkey_bind));
     }
     if a.watcher.hidden.is_some() {
         return Ok("窗口已经处于隐身状态".to_string());
@@ -1395,7 +1453,7 @@ fn force_hide() -> Result<String, String> {
 fn force_show() -> Result<String, String> {
     let a = app();
     if a.watcher.target.is_none() {
-        return Err("先绑定一个窗口（Ctrl+Alt+P）".to_string());
+        return Err(format!("先绑定一个窗口（{}）", a.watcher.cfg.hotkey_bind));
     }
     if a.watcher.hidden.is_none() {
         return Ok("窗口当前可见".to_string());
@@ -1455,7 +1513,8 @@ fn ipc_state_json() -> String {
         concat!(
             r#"{{"version":"{}","bound":{},"bound_desc":"{}","bound_process":"{}","#,
             r#""state":"{}","hidden":{},"mode":"{}","latch":{},"delay_ms":{},"rules":{},"#,
-            r#""scan":{},"picking":{},"elevated":{},"autostart":{},"config":"{}"}}"#,
+            r#""scan":{},"picking":{},"elevated":{},"autostart":{},"config":"{}","#,
+            r#""hotkey_bind":"{}","hotkey_toggle":"{}","hotkey_latch":"{}"}}"#,
         ),
         update::VERSION,
         bound,
@@ -1472,6 +1531,9 @@ fn ipc_state_json() -> String {
         is_elevated(),
         plat::autostart::enabled(),
         ipc::escape_json(&Config::config_path().to_string_lossy()),
+        ipc::escape_json(&a.watcher.cfg.hotkey_bind),
+        ipc::escape_json(&a.watcher.cfg.hotkey_toggle),
+        ipc::escape_json(&a.watcher.cfg.hotkey_latch),
     )
 }
 

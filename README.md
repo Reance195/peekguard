@@ -116,6 +116,10 @@ come from `libproc`.
 | Hide / restore right now | `Ctrl+Alt+H` |
 | Toggle latch mode | `Ctrl+Alt+L` |
 
+All three can be rebound: click a chord in the uTools panel to record a new one
+(Esc cancels), or edit `hotkey_bind` / `hotkey_toggle` / `hotkey_latch` in the
+config and reload.
+
 Tray icon (Windows; Linux and macOS have no tray — use the hotkeys and IPC instead):
 
 - **Double-click** — bind a window via crosshair picker
@@ -259,6 +263,11 @@ skip_minimized = true
 # true = ask GitHub for a newer release on startup. This is the only thing in
 # PeekGuard that ever touches the network; set it to false to stay fully offline.
 check_update = true
+
+# global hotkeys (modifiers Ctrl/Alt/Shift/Win; keys A-Z, 0-9, F1-F12)
+hotkey_bind = Ctrl+Alt+P
+hotkey_toggle = Ctrl+Alt+H
+hotkey_latch = Ctrl+Alt+L
 
 # windows bound automatically at startup (may be empty)
 autobind =

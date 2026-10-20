@@ -328,6 +328,29 @@ body {
   font-weight: 600;
 }
 
+/* 快捷键可点击录制 */
+.hotkeys .hk {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, color 0.15s, outline-color 0.15s;
+}
+
+.hotkeys .hk:hover {
+  background: var(--accent-soft);
+}
+
+.hotkeys .hk:focus-visible {
+  outline: 1px solid var(--accent);
+}
+
+.hotkeys .hk.recording {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+}
+
 .hotkeys i {
   font-style: normal;
   color: var(--border);

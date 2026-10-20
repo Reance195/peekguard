@@ -76,8 +76,12 @@ fn sc(v: i32, scale: f32) -> i32 {
     (v as f32 * scale).round() as i32
 }
 
+/// Hotkey labels shown in the About window, refreshed on every `show()`.
+static HOTKEY_LABELS: std::sync::Mutex<Option<[String; 3]>> = std::sync::Mutex::new(None);
+
 /// Show the About window, or focus the existing one.
-pub fn show(owner: HWND) {
+pub fn show(owner: HWND, hotkeys: [String; 3]) {
+    *HOTKEY_LABELS.lock().unwrap_or_else(|e| e.into_inner()) = Some(hotkeys);
     unsafe {
         let class = to_wide(ABOUT_CLASS);
         if focus_existing(&class) {
@@ -310,10 +314,21 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
                 "绑定任意窗口，鼠标移开自动隐身，移回自动恢复。",
             );
 
+            let labels = HOTKEY_LABELS
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_else(|| {
+                    [
+                        crate::hotkey::DEFAULT_BIND.to_string(),
+                        crate::hotkey::DEFAULT_TOGGLE.to_string(),
+                        crate::hotkey::DEFAULT_LATCH.to_string(),
+                    ]
+                });
             let rows = [
-                ("Ctrl+Alt+P", "选择并绑定窗口"),
-                ("Ctrl+Alt+H", "立即隐身 / 恢复"),
-                ("Ctrl+Alt+L", "锁存模式"),
+                (labels[0].as_str(), "选择并绑定窗口"),
+                (labels[1].as_str(), "立即隐身 / 恢复"),
+                (labels[2].as_str(), "锁存模式"),
             ];
             let mut y = 178;
             for (key, desc) in rows {

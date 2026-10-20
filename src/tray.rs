@@ -99,6 +99,11 @@ pub struct MenuState {
     pub check_update: bool,
     /// Version of a newer release the last check found, if any.
     pub update_available: Option<String>,
+    /// Live hotkey labels ("Ctrl+Alt+P" …), so the menu never goes stale
+    /// after the user rebinds a combo.
+    pub hotkey_bind: String,
+    pub hotkey_toggle: String,
+    pub hotkey_latch: String,
 }
 
 /// Show the context menu and return the chosen command id (0 = dismissed).
@@ -111,17 +116,17 @@ pub fn show_menu(menu_owner: HWND, st: &MenuState) -> usize {
 
         let bind_label = match &st.bound {
             Some(desc) => format!("解绑  ({})", desc),
-            None => "选择窗口并绑定…  (Ctrl+Alt+P)".to_string(),
+            None => format!("选择窗口并绑定…  ({})", st.hotkey_bind),
         };
         append(menu, MF_STRING, CMD_BIND, &bind_label);
 
         if st.bound.is_some() {
             let toggle_label = if st.hidden {
-                "恢复显示  (Ctrl+Alt+H)"
+                format!("恢复显示  ({})", st.hotkey_toggle)
             } else {
-                "立即隐身  (Ctrl+Alt+H)"
+                format!("立即隐身  ({})", st.hotkey_toggle)
             };
-            append(menu, MF_STRING, CMD_TOGGLE, toggle_label);
+            append(menu, MF_STRING, CMD_TOGGLE, &toggle_label);
         }
 
         append(menu, MF_SEPARATOR, 0, "");
@@ -170,7 +175,7 @@ pub fn show_menu(menu_owner: HWND, st: &MenuState) -> usize {
             menu,
             latch_flags,
             CMD_LATCH,
-            "锁存模式（只能手动恢复）  (Ctrl+Alt+L)",
+            &format!("锁存模式（只能手动恢复）  ({})", st.hotkey_latch),
         );
 
         append(

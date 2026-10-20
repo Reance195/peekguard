@@ -82,6 +82,7 @@ pub const SM_CYVIRTUALSCREEN: i32 = 79;
 pub const MOD_ALT: u32 = 0x0001;
 pub const MOD_CONTROL: u32 = 0x0002;
 pub const MOD_SHIFT: u32 = 0x0004;
+pub const MOD_WIN: u32 = 0x0008;
 pub const MOD_NOREPEAT: u32 = 0x4000;
 
 // ---- process / token
@@ -761,4 +762,54 @@ pub fn top_level_windows() -> Vec<HWND> {
         EnumWindows(Some(cb), &mut out as *mut Vec<HWND> as LPARAM);
     }
     out
+}
+
+/// Map a parsed combo key onto its Win32 virtual-key code.
+fn combo_vk(key: crate::hotkey::Key) -> u32 {
+    use crate::hotkey::Key;
+    match key {
+        Key::Letter(c) => c as u32,
+        Key::Digit(c) => c as u32,
+        Key::F(n) => 0x70 + (n as u32 - 1),
+    }
+}
+
+fn combo_mods(c: &crate::hotkey::Combo) -> u32 {
+    let mut mods = MOD_NOREPEAT;
+    if c.ctrl {
+        mods |= MOD_CONTROL;
+    }
+    if c.alt {
+        mods |= MOD_ALT;
+    }
+    if c.shift {
+        mods |= MOD_SHIFT;
+    }
+    if c.meta {
+        mods |= MOD_WIN;
+    }
+    mods
+}
+
+/// (Re-)register the three global hotkeys from `cfg`. Existing registrations
+/// are dropped first; when one fails the rest of this pass is rolled back and
+/// the error names the combination that lost the race.
+pub fn apply_hotkeys(hwnd: HWND, cfg: &crate::config::Config) -> Result<(), String> {
+    let combos = crate::hotkey::from_config(cfg);
+    let ids = [1i32, 2, 3];
+    unsafe {
+        for id in ids {
+            UnregisterHotKey(hwnd, id);
+        }
+        for (i, combo) in combos.iter().enumerate() {
+            let id = ids[i];
+            if RegisterHotKey(hwnd, id, combo_mods(combo), combo_vk(combo.key)) == 0 {
+                for done in &ids[..=i] {
+                    UnregisterHotKey(hwnd, *done);
+                }
+                return Err(format!("快捷键 {} 注册失败（可能被其他程序占用）", combo));
+            }
+        }
+    }
+    Ok(())
 }

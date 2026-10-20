@@ -192,6 +192,13 @@ function renderPanel(state) {
 
   $('meta').textContent = state.config || '';
   $('meta').title = state.config || '';
+
+  // 录制中不要被 2 秒轮询刷掉提示文字
+  if (!recording) {
+    $('hk-bind').textContent = state.hotkey_bind || 'Ctrl+Alt+P';
+    $('hk-toggle').textContent = state.hotkey_toggle || 'Ctrl+Alt+H';
+    $('hk-latch').textContent = state.hotkey_latch || 'Ctrl+Alt+L';
+  }
 }
 
 function renderOffline(show) {
@@ -237,6 +244,88 @@ function stopPolling() {
   }
 }
 
+// ---------------------------------------------------------------- 快捷键录制
+
+/** 正在录制的那一条：{ action, kbd }。 */
+let recording = null;
+
+const MODIFIER_CODES = new Set([
+  'ControlLeft',
+  'ControlRight',
+  'AltLeft',
+  'AltRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'MetaLeft',
+  'MetaRight',
+]);
+
+function modifierPreview(e) {
+  const mods = [];
+  if (e.ctrlKey) mods.push('Ctrl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Win');
+  return mods.length ? mods.join('+') + '+…' : '请按组合…';
+}
+
+/** 把 KeyboardEvent 组装成 "Ctrl+Alt+K"；修饰键不全或主键不支持时返回 null。 */
+function comboFromEvent(e) {
+  const mods = [];
+  if (e.ctrlKey) mods.push('Ctrl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Win');
+  if (!mods.length) return null;
+  const code = e.code || '';
+  let key = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit[0-9]$/.test(code)) key = code.slice(5);
+  else if (/^F([1-9]|1[0-2])$/.test(code)) key = code;
+  return key ? mods.join('+') + '+' + key : null;
+}
+
+function startRecording(action, kbd) {
+  if (busy) return;
+  stopRecording();
+  recording = { action, kbd };
+  kbd.classList.add('recording');
+  kbd.textContent = '请按组合…';
+}
+
+function stopRecording() {
+  if (!recording) return;
+  recording.kbd.classList.remove('recording');
+  recording = null;
+  if (lastState) renderPanel(lastState);
+}
+
+async function onRecordKey(e) {
+  if (!recording) return;
+  if (e.code === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    stopRecording();
+    return;
+  }
+  if (MODIFIER_CODES.has(e.code)) {
+    e.preventDefault();
+    e.stopPropagation();
+    recording.kbd.textContent = modifierPreview(e);
+    return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const combo = comboFromEvent(e);
+  if (!combo) {
+    flash('组合里至少要有一个修饰键，主键支持 A-Z、0-9、F1-F12');
+    return;
+  }
+  const action = recording.action;
+  stopRecording();
+  await act('hotkey ' + action + ' ' + combo);
+}
+
 // ---------------------------------------------------------------- 交互绑定
 
 function bindUi() {
@@ -254,6 +343,24 @@ function bindUi() {
       if (r.checked) act('mode ' + r.dataset.mode);
     });
   }
+
+  for (const kbd of document.querySelectorAll('.hotkeys .hk')) {
+    kbd.addEventListener('click', () => startRecording(kbd.dataset.action, kbd));
+    kbd.addEventListener('keydown', (e) => {
+      if (!recording && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        startRecording(kbd.dataset.action, kbd);
+      }
+    });
+  }
+  window.addEventListener('keydown', onRecordKey, true);
+  window.addEventListener(
+    'mousedown',
+    (e) => {
+      if (recording && !recording.kbd.contains(e.target)) stopRecording();
+    },
+    true
+  );
 
   $('btn-launch').addEventListener('click', onLaunchClicked);
   $('btn-choose').addEventListener('click', onChooseClicked);

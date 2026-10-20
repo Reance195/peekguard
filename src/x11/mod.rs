@@ -832,10 +832,13 @@ pub(crate) fn flush() {
 
 const XK_ESCAPE: c_ulong = 0xFF1B;
 const XK_CONTROL_L: c_ulong = 0xFFE3;
+const XK_CONTROL_R: c_ulong = 0xFFE7;
 const XK_ALT_L: c_ulong = 0xFFE9;
-const XK_P: c_ulong = 0x0070;
-const XK_H: c_ulong = 0x0068;
-const XK_L: c_ulong = 0x006C;
+const XK_ALT_R: c_ulong = 0xFFEA;
+const XK_SHIFT_L: c_ulong = 0xFFE1;
+const XK_SHIFT_R: c_ulong = 0xFFE2;
+const XK_SUPER_L: c_ulong = 0xFFEB;
+const XK_SUPER_R: c_ulong = 0xFFEC;
 
 /// Is the key carrying this keysym currently held down? Reads the global
 /// keyboard bitmap (32 bytes of state, not events); nothing is recorded.
@@ -863,25 +866,46 @@ pub enum Hotkey {
     Latch,
 }
 
-/// Edge detector for Ctrl+Alt+P / Ctrl+Alt+H / Ctrl+Alt+L. Polled once per
-/// tick; fills the role of RegisterHotKey on Windows without ever taking the
-/// combination away from other applications.
+/// Map a parsed combo key onto its keysym. Letters and digits are their ASCII
+/// code points; function keys run from XK_F1 (0xFFBE).
+fn keysym_of(key: crate::hotkey::Key) -> c_ulong {
+    use crate::hotkey::Key;
+    match key {
+        Key::Letter(c) => c as c_ulong,
+        Key::Digit(c) => c as c_ulong,
+        Key::F(n) => 0xFFBE + (n as c_ulong - 1),
+    }
+}
+
+fn combo_down(c: &crate::hotkey::Combo) -> bool {
+    (!c.ctrl || key_down(XK_CONTROL_L) || key_down(XK_CONTROL_R))
+        && (!c.alt || key_down(XK_ALT_L) || key_down(XK_ALT_R))
+        && (!c.shift || key_down(XK_SHIFT_L) || key_down(XK_SHIFT_R))
+        && (!c.meta || key_down(XK_SUPER_L) || key_down(XK_SUPER_R))
+        && key_down(keysym_of(c.key))
+}
+
+/// Edge detector for the configured combos. Polled once per tick; fills the
+/// role of RegisterHotKey on Windows without ever taking the combination away
+/// from other applications.
 pub struct Hotkeys {
     prev: [bool; 3],
+    combos: [crate::hotkey::Combo; 3],
 }
 
 impl Hotkeys {
-    pub fn new() -> Hotkeys {
-        Hotkeys { prev: [false; 3] }
+    pub fn new(cfg: &crate::config::Config) -> Hotkeys {
+        Hotkeys {
+            prev: [false; 3],
+            combos: crate::hotkey::from_config(cfg),
+        }
     }
 
     pub fn poll(&mut self) -> Option<Hotkey> {
-        let ctrl = key_down(XK_CONTROL_L);
-        let alt = key_down(XK_ALT_L);
         let now = [
-            ctrl && alt && key_down(XK_P),
-            ctrl && alt && key_down(XK_H),
-            ctrl && alt && key_down(XK_L),
+            combo_down(&self.combos[0]),
+            combo_down(&self.combos[1]),
+            combo_down(&self.combos[2]),
         ];
         let mut out = None;
         for (i, &down) in now.iter().enumerate() {
@@ -896,6 +920,13 @@ impl Hotkeys {
         self.prev = now;
         out
     }
+}
+
+/// X11 has no registration step: the table is rebuilt on the next poll after
+/// the flag is raised, so this always succeeds.
+pub fn apply_hotkeys(_hwnd: HWND, _cfg: &crate::config::Config) -> Result<(), String> {
+    crate::hotkey::request_reload();
+    Ok(())
 }
 
 // ================================================================ instance lock

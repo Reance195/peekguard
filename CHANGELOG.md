@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Customizable global hotkeys:** the bind / hide-restore / latch chords are no longer
+  hard-coded. Rebind them from the uTools panel (click a chord, press the new combination;
+  Esc cancels) or with `hotkey bind|toggle|latch <combo>` over IPC. Values persist to the
+  config as `hotkey_bind` / `hotkey_toggle` / `hotkey_latch` in canonical spelling
+  (`Ctrl+Alt+P`; `Cmd+Alt+P` on macOS) and are re-registered live on all three platforms.
+  A combo already used by the other two chords is rejected, and a failed OS registration
+  rolls back to the previous chord so hotkeys never go dark.
 - **macOS support:** PeekGuard now runs on macOS (Apple silicon). Window control is a
   hand-written CoreGraphics + Accessibility binding in `src/macos/`: reads (geometry,
   owners, process names) come from `CGWindowListCopyWindowInfo` and work without any

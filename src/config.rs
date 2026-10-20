@@ -11,6 +11,9 @@
 //! alpha = 0
 //! latch = false
 //! restore_on_focus = true
+//! hotkey_bind = Ctrl+Alt+P
+//! hotkey_toggle = Ctrl+Alt+H
+//! hotkey_latch = Ctrl+Alt+L
 //! autobind = process:QQ.exe
 //! rule = process:QQ.exe |  (match any title)
 //! rule = process:msedge.exe | 防窥|小说     (title regex-free substring, |-separated)
@@ -182,6 +185,13 @@ pub struct Config {
     /// Check GitHub for a newer release on startup. This is the only thing that
     /// ever touches the network, so it can be turned off entirely.
     pub check_update: bool,
+    /// Global hotkey that opens the window picker, canonical spelling
+    /// (`Ctrl+Alt+P`). See `hotkey::parse`.
+    pub hotkey_bind: String,
+    /// Global hotkey that hides / restores the protected window.
+    pub hotkey_toggle: String,
+    /// Global hotkey that toggles latching.
+    pub hotkey_latch: String,
 }
 
 impl Default for Config {
@@ -197,6 +207,9 @@ impl Default for Config {
             hide_only_when_focused: false,
             skip_minimized: true,
             check_update: true,
+            hotkey_bind: crate::hotkey::DEFAULT_BIND.to_string(),
+            hotkey_toggle: crate::hotkey::DEFAULT_TOGGLE.to_string(),
+            hotkey_latch: crate::hotkey::DEFAULT_LATCH.to_string(),
         }
     }
 }
@@ -322,6 +335,19 @@ impl Config {
                 "check_update" | "update_check" | "check_updates" => {
                     cfg.check_update = parse_bool(value)
                 }
+                "hotkey_bind" | "hotkey_toggle" | "hotkey_latch" => {
+                    match crate::hotkey::parse(value) {
+                        Ok(combo) => {
+                            let canon = combo.to_string();
+                            match key.as_str() {
+                                "hotkey_bind" => cfg.hotkey_bind = canon,
+                                "hotkey_toggle" => cfg.hotkey_toggle = canon,
+                                _ => cfg.hotkey_latch = canon,
+                            }
+                        }
+                        Err(e) => warnings.push(format!("{key} 无效: {e}（已用默认值）")),
+                    }
+                }
                 "skip_minimized" => {
                     // Inert: minimized windows are always skipped now. Parsed so old
                     // config files keep loading, and surfaced once as a note.
@@ -392,6 +418,15 @@ impl Config {
             "# true = 启动时向 GitHub 查询新版本（唯一的联网行为；false 完全不联网）"
         );
         let _ = writeln!(s, "check_update = {}", self.check_update);
+        let _ = writeln!(s);
+        let _ = writeln!(
+            s,
+            "# 全局快捷键（修饰键 Ctrl/Alt/Shift/Win，主键 A-Z、0-9、F1-F12）"
+        );
+        let _ = writeln!(s, "hotkey_bind = {}", self.hotkey_bind);
+        let _ = writeln!(s, "hotkey_toggle = {}", self.hotkey_toggle);
+        let _ = writeln!(s, "hotkey_latch = {}", self.hotkey_latch);
+        let _ = writeln!(s);
         if self.skip_minimized != Config::default().skip_minimized {
             let _ = writeln!(
                 s,

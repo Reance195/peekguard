@@ -27,7 +27,7 @@ pub mod picker;
 
 use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// A window handle. On this platform it is a `CGWindowID` widened to `u64`,
 /// the same width the other ports use, so the shared code can pass it around
@@ -525,6 +525,7 @@ extern "C" {
         options: u32,
         out_ref: *mut EventHotKeyRef,
     ) -> c_int;
+    fn UnregisterEventHotKey(hot_key_ref: EventHotKeyRef) -> c_int;
     fn GetEventParameter(
         event: EventRef,
         name: u32,
@@ -552,10 +553,10 @@ const CMD_KEY: u32 = 1 << 8;
 /// optionKey.
 const OPTION_KEY: u32 = 1 << 11;
 
-/// ANSI key codes: P, H, L — the Cmd+Option halves of the Windows letters.
-const K_VK_ANSI_P: u32 = 35;
-const K_VK_ANSI_H: u32 = 4;
-const K_VK_ANSI_L: u32 = 37;
+/// shiftKey.
+const SHIFT_KEY: u32 = 1 << 9;
+/// controlKey.
+const CONTROL_KEY: u32 = 1 << 12;
 
 const FLAG_BIND: u8 = 1;
 const FLAG_TOGGLE: u8 = 2;
@@ -595,14 +596,141 @@ unsafe extern "C" fn hotkey_handler(
     0
 }
 
-/// The global hotkeys: Cmd+Option+P / H / L, registered once against the
-/// Carbon event dispatcher. Carbon hotkeys deliver through a run loop, so a
-/// dedicated thread drives one just for them; every press lands in an atomic
-/// flag that [`Hotkeys::poll`] drains, keeping the facade identical to the
-/// Windows and X11 ports.
-fn install_hotkeys() {
-    std::thread::spawn(|| unsafe {
-        let target = GetApplicationEventTarget();
+static HOTKEY_REFS: Mutex<[usize; 3]> = Mutex::new([0; 3]);
+
+/// Map a parsed combo key onto its Carbon virtual key code (ANSI layout).
+fn combo_keycode(key: crate::hotkey::Key) -> Option<u32> {
+    use crate::hotkey::Key;
+    match key {
+        Key::Letter(c) => Some(match c {
+            b'A' => 0,
+            b'S' => 1,
+            b'D' => 2,
+            b'F' => 3,
+            b'H' => 4,
+            b'G' => 5,
+            b'Z' => 6,
+            b'X' => 7,
+            b'C' => 8,
+            b'V' => 9,
+            b'B' => 11,
+            b'Q' => 12,
+            b'W' => 13,
+            b'E' => 14,
+            b'R' => 15,
+            b'Y' => 16,
+            b'T' => 17,
+            b'O' => 31,
+            b'U' => 32,
+            b'I' => 34,
+            b'P' => 35,
+            b'L' => 37,
+            b'J' => 38,
+            b'K' => 40,
+            b'N' => 45,
+            b'M' => 46,
+            _ => return None,
+        }),
+        Key::Digit(c) => Some(match c {
+            b'0' => 29,
+            b'1' => 18,
+            b'2' => 19,
+            b'3' => 20,
+            b'4' => 21,
+            b'5' => 23,
+            b'6' => 22,
+            b'7' => 26,
+            b'8' => 28,
+            b'9' => 25,
+            _ => return None,
+        }),
+        Key::F(n) => Some(match n {
+            1 => 122,
+            2 => 120,
+            3 => 99,
+            4 => 118,
+            5 => 96,
+            6 => 97,
+            7 => 98,
+            8 => 100,
+            9 => 101,
+            10 => 109,
+            11 => 103,
+            12 => 111,
+            _ => return None,
+        }),
+    }
+}
+
+fn combo_mods(c: &crate::hotkey::Combo) -> u32 {
+    let mut mods = 0;
+    if c.meta {
+        mods |= CMD_KEY;
+    }
+    if c.ctrl {
+        mods |= CONTROL_KEY;
+    }
+    if c.alt {
+        mods |= OPTION_KEY;
+    }
+    if c.shift {
+        mods |= SHIFT_KEY;
+    }
+    mods
+}
+
+unsafe fn unregister_locked(refs: &mut [usize; 3]) {
+    for r in refs.iter_mut() {
+        if *r != 0 {
+            UnregisterEventHotKey(*r as EventHotKeyRef);
+            *r = 0;
+        }
+    }
+}
+
+/// Drop any registrations we hold and install `combos`. Called from the Carbon
+/// thread at startup and from the main thread when the user edits a hotkey.
+/// Carbon's hotkey API is documented as usable from any thread, but a live
+/// re-register is the one path not yet exercised on hardware.
+unsafe fn register_all(combos: &[crate::hotkey::Combo; 3]) -> Result<(), String> {
+    let mut refs = HOTKEY_REFS.lock().unwrap_or_else(|e| e.into_inner());
+    unregister_locked(&mut refs);
+    let target = GetApplicationEventTarget();
+    for i in 0..3 {
+        let combo = &combos[i];
+        let Some(code) = combo_keycode(combo.key) else {
+            unregister_locked(&mut refs);
+            return Err(format!("快捷键 {} 在本平台不可用", combo));
+        };
+        let mut key_ref: EventHotKeyRef = std::ptr::null_mut();
+        let status = RegisterEventHotKey(
+            code,
+            combo_mods(combo),
+            EventHotKeyID {
+                signature: HOTKEY_SIGNATURE,
+                id: i as u32 + 1,
+            },
+            target,
+            0,
+            &mut key_ref,
+        );
+        if status != 0 {
+            unregister_locked(&mut refs);
+            return Err(format!("快捷键 {} 注册失败（可能被其他程序占用）", combo));
+        }
+        refs[i] = key_ref as usize;
+    }
+    Ok(())
+}
+
+/// The global hotkeys from the config, registered against the Carbon event
+/// dispatcher. Carbon hotkeys deliver through a run loop, so a dedicated
+/// thread drives one just for them; every press lands in an atomic flag that
+/// [`Hotkeys::poll`] drains, keeping the facade identical to the Windows and
+/// X11 ports.
+fn install_hotkeys(cfg: &crate::config::Config) {
+    let combos = crate::hotkey::from_config(cfg);
+    std::thread::spawn(move || unsafe {
         let spec = EventTypeSpec {
             event_class: K_EVENT_CLASS_KEYBOARD,
             event_kind: K_EVENT_HOT_KEY_PRESSED,
@@ -615,19 +743,8 @@ fn install_hotkeys() {
             std::ptr::null_mut(),
             &mut handler,
         );
-        for (id, key) in [(1u32, K_VK_ANSI_P), (2, K_VK_ANSI_H), (3, K_VK_ANSI_L)] {
-            let mut key_ref: EventHotKeyRef = std::ptr::null_mut();
-            RegisterEventHotKey(
-                key,
-                CMD_KEY | OPTION_KEY,
-                EventHotKeyID {
-                    signature: HOTKEY_SIGNATURE,
-                    id,
-                },
-                target,
-                0,
-                &mut key_ref,
-            );
+        if let Err(e) = register_all(&combos) {
+            eprintln!("[peekguard] {e}");
         }
         CFRunLoopRun();
     });
@@ -643,8 +760,8 @@ pub enum Hotkey {
 pub struct Hotkeys;
 
 impl Hotkeys {
-    pub fn new() -> Hotkeys {
-        install_hotkeys();
+    pub fn new(cfg: &crate::config::Config) -> Hotkeys {
+        install_hotkeys(cfg);
         Hotkeys
     }
 
@@ -661,6 +778,12 @@ impl Hotkeys {
             None
         }
     }
+}
+
+/// Re-register from `cfg` after the user edits a hotkey.
+pub fn apply_hotkeys(_hwnd: HWND, cfg: &crate::config::Config) -> Result<(), String> {
+    let combos = crate::hotkey::from_config(cfg);
+    unsafe { register_all(&combos) }
 }
 
 // ================================================================ input state
