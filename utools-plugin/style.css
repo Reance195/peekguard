@@ -69,7 +69,7 @@ body {
 }
 
 .conn {
-  margin: 2px 0 0;
+  margin: 4px 0 0;
   font-size: 12px;
   color: var(--muted);
 }
@@ -108,11 +108,18 @@ body {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 16px;
+  padding: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 20px;
+}
+
+/* 状态主文字与辅助小字同组，组内 6px，组间由卡片 gap 控制 */
+.status-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .status {
@@ -139,7 +146,7 @@ body {
 }
 
 .note {
-  margin: -6px 0 0;
+  margin: 0;
   font-size: 12px;
   color: var(--muted);
 }
@@ -173,7 +180,7 @@ body {
 }
 
 .btn:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: default;
 }
 
@@ -205,15 +212,25 @@ body {
 
 .row {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* 主按钮吃掉剩余宽度，次要按钮固定宽度靠右 */
+.row > .btn:not(.big) {
+  flex: none;
+  min-width: 88px;
 }
 
 /* ---------------- 复选框 ---------------- */
 
 .switches {
-  gap: 18px;
+  gap: 24px;
+}
+
+#btn-reload {
+  margin-left: auto;
 }
 
 .switch {
@@ -255,7 +272,7 @@ body {
 
 .radios {
   display: inline-flex;
-  gap: 16px;
+  gap: 24px;
   flex-wrap: wrap;
 }
 
@@ -287,7 +304,7 @@ body {
 .hotkeys {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .hotkeys ul {
@@ -296,7 +313,7 @@ body {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
 .hotkeys li {
