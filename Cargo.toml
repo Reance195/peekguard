@@ -1,6 +1,6 @@
 [package]
 name = "peekguard"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Bind any window; hide it when the mouse leaves, restore it when the mouse comes back. Windows, Linux and macOS."
 license = "MIT"
