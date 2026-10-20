@@ -202,7 +202,12 @@ pub fn show_menu(menu_owner: HWND, st: &MenuState) -> usize {
 
         append(menu, save_flags, CMD_UNBIND_ALL, "解绑当前窗口（保留规则）");
         append(menu, MF_STRING, CMD_RELOAD, "重载配置");
-        append(menu, MF_STRING, CMD_OPEN_CONFIG, "打开配置文件（快捷键等设置）");
+        append(
+            menu,
+            MF_STRING,
+            CMD_OPEN_CONFIG,
+            "打开配置文件（快捷键等设置）",
+        );
 
         let startup_flags = if st.autostart {
             MF_STRING | MF_CHECKED
