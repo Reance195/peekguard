@@ -11,7 +11,7 @@
       <header class="topbar">
         <img class="logo" src="logo.png" alt="" />
         <div class="titles">
-          <h1>PeekGuard 防窥守卫</h1>
+          <h1>PeekGuard · 防窥守卫</h1>
           <p id="conn" class="conn">正在连接…</p>
         </div>
         <span id="badge" class="badge">…</span>
@@ -22,8 +22,8 @@
         <p id="exe-path" class="hint"></p>
         <div class="row">
           <button id="btn-launch" class="btn primary" disabled>启动 PeekGuard</button>
-          <button id="btn-choose" class="btn">手动指定程序…</button>
-          <button id="btn-retry" class="btn subtle">重新检测</button>
+          <button id="btn-choose" class="btn" title="手动指定 peekguard.exe 的位置">手动指定程序…</button>
+          <button id="btn-retry" class="btn" title="重新检测 PeekGuard 是否在运行">重新检测</button>
         </div>
         <p class="hint">
           提示：把 peekguard.exe 放到“下载/桌面/插件目录”，或设 PEEKGUARD_EXE 环境变量，都能被自动找到。
@@ -34,47 +34,71 @@
         <div class="status">
           <div class="status-main">
             <span id="state-label" class="state">未绑定</span>
-            <span id="target" class="target">没有绑定任何窗口</span>
           </div>
           <span id="admin-chip" class="chip hidden">管理员模式</span>
         </div>
+        <p id="state-note" class="note hidden"></p>
 
         <div class="row">
-          <button id="btn-toggle" class="btn primary big">立即隐身</button>
-          <button id="btn-bind" class="btn">绑定窗口</button>
-          <button id="btn-unbind" class="btn">解绑</button>
+          <button
+            id="btn-toggle"
+            class="btn primary big"
+            title="一键隐藏/透明当前受守护窗口，防止旁人偷看（未绑定窗口时不可操作）"
+          >
+            立即隐身
+          </button>
+          <button id="btn-bind" class="btn" title="选择需要保护的目标窗口">绑定窗口</button>
+          <button id="btn-unbind" class="btn" title="取消当前窗口防护（未绑定窗口时不可操作）">解绑</button>
         </div>
 
         <div class="row switches">
-          <label class="switch">
+          <label class="switch" title="锁定防护，禁止意外取消隐藏">
             <input id="sw-latch" type="checkbox" />
             <span>锁存模式</span>
           </label>
-          <label class="switch">
+          <label class="switch" title="按配置规则自动管控窗口">
             <input id="sw-scan" type="checkbox" />
             <span>规则保护</span>
           </label>
-          <label class="switch">
+          <label class="switch" title="电脑启动后自动运行防窥守卫">
             <input id="sw-autostart" type="checkbox" />
             <span>开机自启</span>
           </label>
-          <button id="btn-reload" class="btn subtle">重载配置</button>
+          <button id="btn-reload" class="btn" title="重新读取本地配置文件，更新防护规则">重载配置</button>
         </div>
 
-        <div class="seg" id="mode" role="group" aria-label="隐身方式">
-          <button data-mode="alpha">透明</button>
-          <button data-mode="move">移出屏幕</button>
-          <button data-mode="hide">隐藏窗口</button>
+        <div class="modes">
+          <span class="group-label">隐身方式：</span>
+          <div id="mode" class="radios" role="radiogroup" aria-label="隐身方式">
+            <label class="radio" title="窗口保留，设置低透明度，后台仍运行">
+              <input type="radio" name="mode" value="alpha" data-mode="alpha" />
+              <span>透明</span>
+            </label>
+            <label class="radio" title="把窗口移动到屏幕可视区域外">
+              <input type="radio" name="mode" value="move" data-mode="move" />
+              <span>移出屏幕</span>
+            </label>
+            <label class="radio" title="彻底隐藏窗口，任务栏不可见">
+              <input type="radio" name="mode" value="hide" data-mode="hide" />
+              <span>隐藏窗口</span>
+            </label>
+          </div>
         </div>
 
-        <p class="hint">
-          快捷键：Ctrl+Alt+P 绑定 · Ctrl+Alt+H 隐身/恢复 · Ctrl+Alt+L 锁存
-        </p>
+        <div class="hotkeys">
+          <span class="group-label">全局快捷键</span>
+          <ul>
+            <li><kbd>Ctrl+Alt+P</kbd><i>｜</i>绑定窗口</li>
+            <li><kbd>Ctrl+Alt+H</kbd><i>｜</i>隐身 / 恢复显示</li>
+            <li><kbd>Ctrl+Alt+L</kbd><i>｜</i>开启锁存</li>
+          </ul>
+        </div>
       </section>
 
       <footer class="foot">
+        <span class="meta-label">📄 配置文件路径：</span>
         <span id="meta" class="meta" title=""></span>
-        <button id="btn-out" class="link">关闭</button>
+        <button id="btn-out" class="link" title="关闭面板">关闭面板</button>
       </footer>
 
       <div id="toast" class="toast" role="status"></div>

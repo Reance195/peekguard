@@ -1245,13 +1245,13 @@ pub(crate) fn ipc_command(line: &str) -> String {
     let arg = parts.next().unwrap_or("").to_ascii_lowercase();
     match verb.as_str() {
         "status" | "ping" => ipc_ok(""),
-        "hide" => ipc_act(force_hide()),
-        "show" => ipc_act(force_show()),
+        "hide" => ipc_quiet(force_hide()),
+        "show" => ipc_quiet(force_show()),
         "toggle" => {
             if app().watcher.hidden.is_some() {
-                ipc_act(force_show())
+                ipc_quiet(force_show())
             } else {
-                ipc_act(force_hide())
+                ipc_quiet(force_hide())
             }
         }
         "bind" => {
@@ -1360,8 +1360,8 @@ pub(crate) fn ipc_command(line: &str) -> String {
 }
 
 /// Hide the bound window right now. Same behavior as the hotkey path, but the
-/// outcome is returned instead of ballooned — the IPC layer decides how to
-/// surface it (and reuses it for the balloon text).
+/// outcome is returned instead of ballooned; the IPC layer hands it back in
+/// the JSON response.
 fn force_hide() -> Result<String, String> {
     let a = app();
     if a.watcher.target.is_none() {
@@ -1417,18 +1417,12 @@ fn parse_toggle_arg(arg: &str, current: bool) -> Result<bool, String> {
     }
 }
 
-/// Command with a user-facing outcome: balloon the message (a panel click or
-/// a quick command may be the only visible feedback) and echo it in the JSON.
-fn ipc_act(outcome: Result<String, String>) -> String {
+/// Outcome helper for IPC commands: the message travels back in the JSON only,
+/// so hiding or restoring a window never fires a notification.
+fn ipc_quiet(outcome: Result<String, String>) -> String {
     match outcome {
-        Ok(msg) => {
-            notify(&format!("{msg}。"));
-            ipc_ok(&msg)
-        }
-        Err(msg) => {
-            notify(&format!("{msg}。"));
-            ipc_err(&msg)
-        }
+        Ok(msg) => ipc_ok(&msg),
+        Err(msg) => ipc_err(&msg),
     }
 }
 

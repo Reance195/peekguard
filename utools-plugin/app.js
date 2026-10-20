@@ -34,6 +34,30 @@ const STATE_LABEL = {
   latched: '已隐身 · 锁定',
 };
 
+/** 主状态行：图标 + 状态 + 进程名，例如「🛡️ 正在守护 · WindowsTerminal.exe」。 */
+function stateHeadline(state) {
+  const suffix = state.bound_process ? ' · ' + state.bound_process : '';
+  switch (state.state) {
+    case 'armed':
+      return '🛡️ 正在守护' + suffix;
+    case 'pending':
+      return '⏳ 即将隐身' + suffix;
+    case 'hidden':
+      return '🙈 已隐身' + suffix;
+    case 'latched':
+      return '🔒 已隐身（锁定）' + suffix;
+    default:
+      return '未绑定任何窗口';
+  }
+}
+
+/** bound_desc 形如「进程 — 标题」，副行只显示标题部分。 */
+function boundTitle(desc) {
+  if (!desc) return '';
+  const sep = desc.indexOf(' — ');
+  return sep >= 0 ? desc.slice(sep + 3) : desc;
+}
+
 const $ = (id) => document.getElementById(id);
 
 let busy = false;
@@ -105,7 +129,6 @@ async function refresh() {
 async function act(command) {
   if (busy) return;
   busy = true;
-  setControlsDisabled(true);
   try {
     const r = await pg.send(command);
     if (r.offline) {
@@ -120,8 +143,6 @@ async function act(command) {
     }
   } finally {
     busy = false;
-    setControlsDisabled(false);
-    if (lastState) renderPanel(lastState);
   }
 }
 
@@ -135,29 +156,38 @@ function renderPanel(state) {
   }
   panel.classList.remove('hidden');
 
-  $('conn').textContent = '已连接 · v' + (state.version || '');
+  $('conn').textContent = '已就绪 · v' + (state.version || '');
   $('conn').className = 'conn ok';
 
   const label = STATE_LABEL[state.state] || state.state || '未知';
   $('badge').textContent = label;
   $('badge').dataset.state = state.state || '';
 
-  $('state-label').textContent = label;
-  $('target').textContent = state.bound && state.bound_desc ? state.bound_desc : '没有绑定任何窗口';
+  $('state-label').textContent = stateHeadline(state);
+  const note = $('state-note');
+  const title = boundTitle(state.bound_desc);
+  if (!state.bound) {
+    note.textContent = '请先绑定目标窗口，再使用隐身防护功能';
+    note.classList.remove('hidden');
+  } else {
+    note.textContent = title ? '所属程序：' + title : '';
+    note.classList.toggle('hidden', !title);
+  }
   $('admin-chip').classList.toggle('hidden', !state.elevated);
 
   const hiddenNow = state.state === 'hidden' || state.state === 'latched';
   const toggle = $('btn-toggle');
   toggle.textContent = hiddenNow ? '恢复显示' : '立即隐身';
   toggle.classList.toggle('restore', hiddenNow);
+  toggle.disabled = !state.bound;
 
   $('btn-unbind').disabled = !state.bound;
   $('sw-latch').checked = !!state.latch;
   $('sw-scan').checked = !!state.scan;
   $('sw-autostart').checked = !!state.autostart;
 
-  for (const b of document.querySelectorAll('#mode button')) {
-    b.classList.toggle('on', b.dataset.mode === state.mode);
+  for (const r of document.querySelectorAll('#mode input')) {
+    r.checked = r.dataset.mode === state.mode;
   }
 
   $('meta').textContent = state.config || '';
@@ -185,10 +215,6 @@ function renderOffline(show) {
     pathEl.textContent = '没有找到 peekguard.exe。手动指定一次后会记住。';
     $('btn-launch').disabled = true;
   }
-}
-
-function setControlsDisabled(disabled) {
-  for (const el of document.querySelectorAll('#panel button, #panel input')) el.disabled = disabled;
 }
 
 function flash(text) {
@@ -223,8 +249,10 @@ function bindUi() {
   $('sw-autostart').addEventListener('change', (e) =>
     act('autostart ' + (e.target.checked ? 'on' : 'off'))
   );
-  for (const b of document.querySelectorAll('#mode button')) {
-    b.addEventListener('click', () => act('mode ' + b.dataset.mode));
+  for (const r of document.querySelectorAll('#mode input')) {
+    r.addEventListener('change', () => {
+      if (r.checked) act('mode ' + r.dataset.mode);
+    });
   }
 
   $('btn-launch').addEventListener('click', onLaunchClicked);

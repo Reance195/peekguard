@@ -230,9 +230,14 @@ impl Watcher {
         self.last_cursor = cursor;
         let hidden = self.hidden.is_some();
 
-        // Latched: nothing but an explicit call gets it back.
+        // Latched: nothing but an explicit call gets it back. If the latch was
+        // lifted while the window stayed hidden, fall through to the normal
+        // hidden logic so returning to the window brings it back again.
         if self.state == State::Latched {
-            return Action::None;
+            if self.cfg.latch {
+                return Action::None;
+            }
+            self.state = State::Hidden;
         }
 
         if hidden {

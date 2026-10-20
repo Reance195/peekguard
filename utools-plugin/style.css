@@ -1,29 +1,19 @@
-/* PeekGuard uTools 插件样式：跟随系统深浅色，主色取图标里的青色。 */
+/* PeekGuard uTools 插件样式：纯白底、主色 #1677FF，按区块分组。 */
 
 :root {
-  color-scheme: light dark;
-  --bg: #f6f7f9;
+  --bg: #ffffff;
   --card: #ffffff;
-  --border: #e3e6ec;
-  --text: #1c1f26;
-  --muted: #6b7280;
-  --accent: #29b8ff;
-  --accent-ink: #ffffff;
+  --border: #d9d9d9;
+  --line: #ededed;
+  --ink: #262626;
+  --text: #595959;
+  --muted: #8c8c8c;
+  --accent: #1677ff;
+  --accent-hover: #0958d9;
+  --accent-soft: #e6f4ff;
   --danger: #e5484d;
-  --ok: #2f9e63;
   --toast-bg: #1f2430;
   --toast-ink: #ffffff;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --card: #171a21;
-    --border: #262b36;
-    --text: #e8eaf0;
-    --muted: #9aa3b2;
-    --toast-bg: #2a3040;
-  }
 }
 
 * {
@@ -34,7 +24,7 @@ body {
   margin: 0;
   font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   background: var(--bg);
-  color: var(--text);
+  color: var(--ink);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -45,7 +35,7 @@ body {
   padding: 18px 20px 12px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .hidden {
@@ -75,6 +65,7 @@ body {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
+  color: var(--accent);
 }
 
 .conn {
@@ -84,7 +75,7 @@ body {
 }
 
 .conn.ok {
-  color: var(--ok);
+  color: var(--muted);
 }
 
 .conn.off {
@@ -96,47 +87,32 @@ body {
   font-size: 12px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--muted);
+  background: var(--accent-soft);
+  color: var(--accent);
   white-space: nowrap;
 }
 
-.badge[data-state="armed"] {
-  color: #22a6e8;
-  border-color: rgba(41, 184, 255, 0.45);
-  background: rgba(41, 184, 255, 0.12);
-}
-
-.badge[data-state="pending"] {
-  color: #d18b1f;
-  border-color: rgba(209, 139, 31, 0.45);
-  background: rgba(209, 139, 31, 0.12);
-}
-
-.badge[data-state="hidden"],
-.badge[data-state="latched"] {
-  color: #8b5cf6;
-  border-color: rgba(139, 92, 246, 0.45);
-  background: rgba(139, 92, 246, 0.12);
+.badge[data-state="idle"] {
+  background: #f5f5f5;
+  color: var(--text);
 }
 
 .badge[data-state="offline"] {
-  color: var(--danger);
-  border-color: rgba(229, 72, 77, 0.45);
   background: rgba(229, 72, 77, 0.1);
+  color: var(--danger);
 }
 
 /* ---------------- 卡片 ---------------- */
 
 .card {
   background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
   padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .status {
@@ -154,16 +130,18 @@ body {
 }
 
 .state {
-  font-size: 22px;
-  font-weight: 650;
-}
-
-.target {
-  font-size: 13px;
-  color: var(--muted);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.note {
+  margin: -6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .chip {
@@ -181,16 +159,17 @@ body {
   appearance: none;
   border: 1px solid var(--border);
   background: var(--card);
-  color: var(--text);
+  color: #434343;
   border-radius: 10px;
   padding: 9px 14px;
   font-size: 13px;
   cursor: pointer;
-  transition: border-color 0.15s, opacity 0.15s;
+  transition: border-color 0.15s, color 0.15s, background 0.15s, opacity 0.15s;
 }
 
 .btn:hover:not(:disabled) {
   border-color: var(--accent);
+  color: var(--accent);
 }
 
 .btn:disabled {
@@ -198,15 +177,23 @@ body {
   cursor: default;
 }
 
+.btn.primary:disabled {
+  background: var(--border);
+  border-color: var(--border);
+  color: #ffffff;
+  opacity: 1;
+}
+
 .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent-ink);
+  color: #ffffff;
 }
 
-.btn.primary.restore {
-  background: #7c5cff;
-  border-color: #7c5cff;
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #ffffff;
 }
 
 .btn.big {
@@ -216,11 +203,6 @@ body {
   padding: 12px 20px;
 }
 
-.btn.subtle {
-  background: transparent;
-  color: var(--muted);
-}
-
 .row {
   display: flex;
   gap: 10px;
@@ -228,10 +210,10 @@ body {
   flex-wrap: wrap;
 }
 
-/* ---------------- 开关 ---------------- */
+/* ---------------- 复选框 ---------------- */
 
 .switches {
-  gap: 16px;
+  gap: 18px;
 }
 
 .switch {
@@ -239,6 +221,7 @@ body {
   align-items: center;
   gap: 6px;
   font-size: 13px;
+  color: var(--muted);
   cursor: pointer;
   user-select: none;
 }
@@ -251,34 +234,87 @@ body {
   cursor: pointer;
 }
 
-/* ---------------- 分段选择 ---------------- */
-
-.seg {
-  display: inline-flex;
-  align-self: flex-start;
-  gap: 3px;
-  padding: 3px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+.switch:has(input:checked) {
+  color: var(--accent);
 }
 
-.seg button {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
+/* ---------------- 隐身方式 ---------------- */
+
+.modes {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.group-label {
   font-size: 13px;
-  padding: 6px 14px;
-  border-radius: 8px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.radios {
+  display: inline-flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.radio input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
   cursor: pointer;
 }
 
-.seg button.on {
-  background: var(--card);
-  color: var(--text);
+.radio:has(input:checked) span {
+  color: var(--accent);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* ---------------- 快捷键 ---------------- */
+
+.hotkeys {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hotkeys ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hotkeys li {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.hotkeys kbd {
+  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.hotkeys i {
+  font-style: normal;
+  color: var(--border);
+  margin: 0 4px;
 }
 
 /* ---------------- 页脚与提示 ---------------- */
@@ -294,13 +330,21 @@ body {
   margin-top: auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 6px;
   padding-top: 4px;
 }
 
+.meta-label {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .meta {
-  font-size: 11px;
+  flex: 1;
+  min-width: 0;
+  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-size: 12px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -308,6 +352,7 @@ body {
 }
 
 .link {
+  flex: none;
   appearance: none;
   border: 0;
   background: transparent;
