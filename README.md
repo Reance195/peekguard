@@ -314,7 +314,11 @@ plugin targets Windows. On Linux and macOS, use the IPC tools directly.)
 
 Install: in uTools, search the plugin marketplace for `PeekGuard`; alternatively load
 the `utools-plugin/` folder directly from uTools → Developer Tools → create project
-(there is no build step — what is in the folder is what runs).
+(there is no build step — what is in the folder is what runs). The plugin ships with
+`utools-plugin/peekguard.exe`, so a fresh install can start the core immediately. If
+that copy is missing or outdated, the offline panel's **Download PeekGuard** button
+opens the latest GitHub release; put the downloaded exe in `Downloads` and hit
+**Retry**.
 
 Usage:
 
@@ -324,9 +328,9 @@ Usage:
   plugin dismisses itself when done)
 - Type `绑定窗口` → opens PeekGuard's crosshair picker; click a window to bind it
 
-If PeekGuard is not running, the plugin probes the usual install locations and can
-launch it; if that fails, pick `peekguard.exe` manually in the panel (the path is
-remembered).
+If PeekGuard is not running, the plugin probes the usual install locations (including
+its own folder) and can launch it; if that fails, download the latest release from the
+panel, or pick `peekguard.exe` manually (the path is remembered).
 
 The plugin talks to PeekGuard over **local IPC** (the named pipe
 `\\.\pipe\PeekGuard-IPC-v1` on Windows; on Linux and macOS a Unix domain socket,
@@ -435,8 +439,8 @@ can be checked line-by-line against the SDK headers.
 | `build.rs` | embeds the app icon into the exe (no `.ico`, no resource compiler) |
 
 `utools-plugin/` is the companion uTools plugin (plain HTML/CSS/JS plus a preload
-script; no build step, no bundler); `tools/make-logo.ps1` renders its icon from the
-same "eye" design the tray uses.
+script, and a bundled Windows `peekguard.exe`; no build step, no bundler);
+`tools/make-logo.ps1` renders its icon from the same "eye" design the tray uses.
 
 ## Code signing policy
 

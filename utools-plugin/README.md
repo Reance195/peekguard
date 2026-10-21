@@ -4,14 +4,18 @@
 不用离开键盘去点托盘图标。
 
 插件本身没有任何构建步骤，纯原生 HTML/CSS/JS + Node.js preload，
-通过命名管道与 PeekGuard 主程序通信。
+通过命名管道与 PeekGuard 主程序通信。插件目录已附带 `peekguard.exe`，安装后即可使用。
 
 ## 安装
 
 - **应用市场**：在 uTools 插件市场搜索「PeekGuard」或「防窥守卫」，安装即可。
 - **本地调试**：uTools → 开发者工具 → 项目 → 新建 → 选择本目录（`utools-plugin/`）。
 
-主程序（`peekguard.exe`）需另行安装或用本插件启动：
+主程序（`peekguard.exe`）已随插件附带；如内置版本被清理或需要更新，可在面板点
+「下载 PeekGuard」从 [GitHub Releases](https://github.com/Reance195/peekguard/releases/latest)
+下载最新版，放到“下载”目录后点「重新检测」。也可以手动指定程序路径，或从 Release 页面
+自行下载安装。
+
 面板在未检测到运行时，会按下面的顺序自动探测，找不到可在面板里手动选择并记住路径。
 
 1. 面板里手动指定的路径（记住后优先生效）
@@ -52,7 +56,7 @@
 响应始终是一行 JSON，`state` 是执行后的完整状态快照：
 
 ```json
-{"ok":true,"msg":"已隐身","state":{"version":"0.1.0","bound":true,"bound_desc":"QQ.exe — 消息","bound_process":"QQ.exe","state":"hidden","hidden":true,"mode":"alpha","latch":false,"delay_ms":60,"rules":0,"scan":true,"picking":false,"elevated":false,"autostart":false,"config":"C:\\Users\\…\\peekguard.conf"}}
+{"ok":true,"msg":"已隐身","state":{"version":"0.2.0","bound":true,"bound_desc":"QQ.exe — 消息","bound_process":"QQ.exe","state":"hidden","hidden":true,"mode":"alpha","latch":false,"delay_ms":60,"rules":0,"scan":true,"picking":false,"elevated":false,"autostart":false,"config":"C:\\Users\\…\\peekguard.conf"}}
 ```
 
 失败时为 `{"ok":false,"err":"…","state":{…}}`。
@@ -89,6 +93,7 @@ utools-plugin/
 ├── app.js             # 面板逻辑与快捷指令处理
 ├── style.css          # 样式（跟随系统深浅色）
 ├── logo.png           # 256×256 图标（与主程序图标同源）
+├── peekguard.exe      # 随插件附带的主程序（Windows）
 ├── test-cli.js        # 不依赖 uTools 的命令行测试工具
 ├── tools/
 │   └── make-logo.ps1  # 重新生成 logo.png（pwsh + System.Drawing）

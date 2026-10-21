@@ -3,7 +3,7 @@
   "description": "隐身被保护的窗口：鼠标移开自动隐身，鼠标移回自动恢复",
   "author": "Reance195",
   "homepage": "https://github.com/Reance195/peekguard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "index.html",
   "logo": "logo.png",
   "preload": "preload.js",

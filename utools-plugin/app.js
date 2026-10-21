@@ -14,7 +14,11 @@ const ut =
         outPlugin: () => {},
         showNotification: (t) => console.log('[notification]', t),
         showOpenDialog: () => null,
+        shellOpenExternal: (url) => window.open(url, '_blank', 'noopener'),
       };
+
+const DOWNLOAD_URL =
+  'https://github.com/Reance195/peekguard/releases/latest/download/peekguard.exe';
 
 const pg = window.peekguard || {
   send: async () => ({ ok: false, offline: true, err: 'preload 未加载' }),
@@ -364,8 +368,17 @@ function bindUi() {
 
   $('btn-launch').addEventListener('click', onLaunchClicked);
   $('btn-choose').addEventListener('click', onChooseClicked);
+  $('btn-download').addEventListener('click', openDownload);
   $('btn-retry').addEventListener('click', () => refresh());
   $('btn-out').addEventListener('click', () => ut.outPlugin());
+}
+
+function openDownload() {
+  if (typeof ut.shellOpenExternal === 'function') {
+    ut.shellOpenExternal(DOWNLOAD_URL);
+  } else {
+    window.open(DOWNLOAD_URL, '_blank', 'noopener');
+  }
 }
 
 async function onLaunchClicked() {
