@@ -4,9 +4,12 @@
 
     cargo test
 
-59 tests, no side effects (plus one `#[ignore]`d diagnostic that asserts nothing). Covers config parsing, rule matching (including the
+65 tests on Windows (`cargo test`; platform modules are cfg-gated, so the total
+differs on Linux/macOS), no side effects (plus one `#[ignore]`d diagnostic that
+asserts nothing). Covers config parsing, rule matching (including the
 `process:` / `class:` / `title:` combinators), the scanner's rate limiting and
-per-window suppression, autostart's registry-value naming, the icon renderer, and
+per-window suppression, autostart's registry-value naming, the icon renderer,
+shared crash-journal parsing (rect/alpha/opacity/pid guards), and
 the watch state machine through an injected fake platform environment (debounce,
 manual hide, latch, refusals, target loss).
 

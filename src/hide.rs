@@ -9,6 +9,7 @@
 //! for windows owned by other processes. Verified on this machine.
 
 use crate::config::HideMode;
+use crate::hide_common::{self, Entry};
 use crate::win::*;
 use std::ffi::c_void;
 
@@ -95,32 +96,27 @@ impl Hidden {
     /// The mirror parser is `from_journal_line`; keep the two in sync.
     pub fn journal_line(&self) -> String {
         let s = &self.snap;
-        format!(
-            "hwnd={:#x} mode={} rect={} alpha={} layered={} exstyle={:#x} pid={} proc={}\n",
+        let pid = process_id(s.hwnd);
+        hide_common::format(
             s.hwnd as usize,
-            self.mode.as_str(),
-            fmt_rect(&s.rect),
-            s.alpha
-                .map(|a| a.to_string())
-                .unwrap_or_else(|| "none".into()),
-            if s.was_layered { 1 } else { 0 },
-            s.ex_style,
-            process_id(s.hwnd),
-            process_name(process_id(s.hwnd)),
+            self.mode,
+            (s.rect.left, s.rect.top, s.rect.right, s.rect.bottom),
+            &[
+                ("alpha", hide_common::number_or_none(s.alpha)),
+                (
+                    "layered",
+                    if s.was_layered {
+                        "1".to_string()
+                    } else {
+                        "0".to_string()
+                    },
+                ),
+                ("exstyle", format!("{:#x}", s.ex_style)),
+            ],
+            pid,
+            &process_name(pid),
         )
     }
-}
-
-/// Test-only: `PEEKGUARD_REFUSE_HIDE=1` makes every hide attempt fail the way an
-/// elevated target does, so the refusal path can be exercised deterministically.
-/// A real elevated process cannot be created from a test without a UAC prompt.
-fn refuse_hide_hook() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("PEEKGUARD_REFUSE_HIDE")
-            .map(|v| v == "1")
-            .unwrap_or(false)
-    })
 }
 
 pub fn hide(hwnd: HWND, mode: HideMode, alpha: u8) -> Option<Hidden> {
@@ -147,7 +143,7 @@ pub fn hide(hwnd: HWND, mode: HideMode, alpha: u8) -> Option<Hidden> {
     // it stands in for. A genuinely elevated target fails *inside* the hide call
     // (SetWindowLongPtrW refuses), i.e. after the entry has been written; short-
     // circuiting earlier would leave the cleanup path untested.
-    if refuse_hide_hook() {
+    if hide_common::refuse_hide_hook() {
         crate::session::write(&[]);
         return None;
     }
@@ -239,68 +235,36 @@ pub fn owner_elevated(hwnd: HWND) -> bool {
 }
 
 // ----------------------------------------------------------- journal parsing
-// Crash-recovery journal serialization lives here because the field set is
-// platform-specific. `session` stores whatever `journal_line` produces and
-// feeds the lines back to `from_journal_line` on the next start.
-
-fn fmt_rect(r: &RECT) -> String {
-    format!("{},{},{},{}", r.left, r.top, r.right, r.bottom)
-}
-
-fn parse_rect(s: &str) -> Option<RECT> {
-    let v: Vec<i32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-    if v.len() != 4 {
-        return None;
-    }
-    Some(RECT {
-        left: v[0],
-        top: v[1],
-        right: v[2],
-        bottom: v[3],
-    })
-}
-
-fn field<'a>(fields: &'a [(&str, String)], key: &str) -> Option<&'a str> {
-    fields
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, v)| v.as_str())
-}
+// The wire format is shared through `hide_common`; this module only rebuilds
+// the Windows snapshot, whose extra fields are alpha/layered/exstyle.
 
 /// Parse one journal line back into a `Hidden`. `None` means the line is
 /// malformed, its window is gone, or the HWND was recycled by another process.
 pub fn from_journal_line(line: &str) -> Option<Hidden> {
-    let mut fields: Vec<(&str, String)> = Vec::new();
-    for part in line.split_whitespace() {
-        if let Some((k, v)) = part.split_once('=') {
-            fields.push((k, v.to_string()));
-        }
-    }
-    let hwnd_str = field(&fields, "hwnd")?;
-    let raw = usize::from_str_radix(hwnd_str.trim_start_matches("0x"), 16).ok()?;
-    let hwnd = raw as HWND;
+    let entry = Entry::parse(line);
+    let hwnd = entry.hwnd()? as HWND;
     if !is_valid(hwnd) {
         return None; // window is gone; nothing to do
     }
     // If the process restarted, the HWND may have been recycled: check the pid.
-    if let (Some(pid_s), Some(proc_s)) = (field(&fields, "pid"), field(&fields, "proc")) {
-        if let Ok(pid) = pid_s.parse::<u32>() {
-            let actual = process_id(hwnd);
-            let actual_name = process_name(actual);
-            if actual != pid && !actual_name.eq_ignore_ascii_case(proc_s) {
-                return None;
-            }
-        }
+    let actual_pid = process_id(hwnd);
+    if !entry.same_process(actual_pid, &process_name(actual_pid)) {
+        return None;
     }
-    let mode = field(&fields, "mode")
-        .and_then(HideMode::parse)
-        .unwrap_or(HideMode::Alpha);
-    let rect = field(&fields, "rect")
-        .and_then(parse_rect)
+    let mode = entry.mode();
+    let rect = entry
+        .rect()
+        .map(|(left, top, right, bottom)| RECT {
+            left,
+            top,
+            right,
+            bottom,
+        })
         .unwrap_or_else(|| window_rect(hwnd));
-    let alpha = field(&fields, "alpha").and_then(|v| v.parse::<u8>().ok());
-    let was_layered = field(&fields, "layered").map(|v| v == "1").unwrap_or(false);
-    let ex_style = field(&fields, "exstyle")
+    let alpha = entry.number("alpha");
+    let was_layered = entry.get("layered").map(|v| v == "1").unwrap_or(false);
+    let ex_style = entry
+        .get("exstyle")
         .and_then(|v| isize::from_str_radix(v.trim_start_matches("0x"), 16).ok())
         .unwrap_or_else(|| ex_style(hwnd));
     Some(Hidden {

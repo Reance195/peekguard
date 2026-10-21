@@ -9,9 +9,9 @@
 //! unrecoverable state is "invisible with no journal entry", so the entry is always
 //! written first. Extra entries are harmless — replaying a visible window is a no-op.
 //!
-//! The journal line format itself is platform-specific and lives next to the
-//! hide implementation (`plat::hide::journal_line` / `from_journal_line`); this
-//! module only decides *when* to write and replay.
+//! The line format is shared (`hide_common`); each platform hide module adds and
+//! parses its own snapshot fields via `plat::hide::journal_line` /
+//! `from_journal_line`. This module only decides *when* to write and replay.
 
 use crate::plat::hide::{from_journal_line, Hidden};
 use std::sync::{Mutex, MutexGuard};

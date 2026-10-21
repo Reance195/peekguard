@@ -22,6 +22,7 @@ use std::os::raw::{c_long, c_uchar};
 
 use super::*;
 use crate::config::HideMode;
+use crate::hide_common::{self, Entry};
 
 /// Everything needed to bring one window back from a hidden state.
 #[derive(Clone, Debug)]
@@ -99,29 +100,16 @@ impl Hidden {
     /// `from_journal_line` after a restart.
     pub fn journal_line(&self) -> String {
         let s = &self.snap;
-        format!(
-            "hwnd={:#x} mode={} rect={},{},{},{} opacity={} pid={} proc={}\n",
+        let pid = process_id(s.hwnd);
+        hide_common::format(
             s.hwnd as usize,
-            self.mode.as_str(),
-            s.rect.left,
-            s.rect.top,
-            s.rect.right,
-            s.rect.bottom,
-            s.opacity
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "none".into()),
-            process_id(s.hwnd),
-            process_name(process_id(s.hwnd)),
+            self.mode,
+            (s.rect.left, s.rect.top, s.rect.right, s.rect.bottom),
+            &[("opacity", hide_common::number_or_none(s.opacity))],
+            pid,
+            &process_name(pid),
         )
     }
-}
-
-/// Test hook: `PEEKGUARD_REFUSE_HIDE=1` makes `hide()` fail like a window
-/// that refuses to be hidden.
-fn refuse_hide_hook() -> bool {
-    std::env::var("PEEKGUARD_REFUSE_HIDE")
-        .map(|v| v == "1")
-        .unwrap_or(false)
 }
 
 /// A compositing manager must own the `_NET_WM_CM_S0` selection for the
@@ -145,7 +133,7 @@ pub fn hide(hwnd: HWND, mode: HideMode, alpha: u8) -> Option<Hidden> {
     let hidden = Hidden { snap, mode };
     crate::session::write(std::slice::from_ref(&hidden));
 
-    if refuse_hide_hook() {
+    if hide_common::refuse_hide_hook() {
         crate::session::write(&[]);
         return None;
     }
@@ -205,59 +193,33 @@ pub fn owner_elevated(_hwnd: HWND) -> bool {
     false
 }
 
-fn parse_rect(s: &str) -> Option<RECT> {
-    let mut it = s.split(',');
-    let left = it.next()?.parse().ok()?;
-    let top = it.next()?.parse().ok()?;
-    let right = it.next()?.parse().ok()?;
-    let bottom = it.next()?.parse().ok()?;
-    Some(RECT {
-        left,
-        top,
-        right,
-        bottom,
-    })
-}
-
-fn field<'a>(fields: &'a [(&str, &str)], key: &str) -> Option<&'a str> {
-    fields.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
-}
-
 /// Parse one journal line produced by `journal_line`.  Returns `None` for
 /// stale entries (window gone, or the pid/process pair no longer matches,
 /// guarding against id reuse) so `session::replay` just skips them.
 pub fn from_journal_line(line: &str) -> Option<Hidden> {
-    let fields: Vec<(&str, &str)> = line
-        .split_whitespace()
-        .filter_map(|kv| kv.split_once('='))
-        .collect();
-
-    let hwnd_hex = field(&fields, "hwnd")?;
-    let hwnd = u64::from_str_radix(hwnd_hex.trim_start_matches("0x"), 16).ok()?;
+    let entry = Entry::parse(line);
+    let hwnd = entry.hwnd()? as HWND;
     if hwnd == 0 || !is_valid(hwnd) {
         return None;
     }
 
     // Guard against window id reuse: the process must still match.
-    if let Some(pid_raw) = field(&fields, "pid") {
-        if let Some(proc_raw) = field(&fields, "proc") {
-            if let Ok(pid) = pid_raw.parse::<u32>() {
-                let actual_pid = process_id(hwnd);
-                let actual_name = process_name(actual_pid);
-                if actual_pid != pid && !actual_name.eq_ignore_ascii_case(proc_raw) {
-                    return None;
-                }
-            }
-        }
+    let actual_pid = process_id(hwnd);
+    if !entry.same_process(actual_pid, &process_name(actual_pid)) {
+        return None;
     }
 
-    let mode = field(&fields, "mode")
-        .and_then(HideMode::parse)
-        .unwrap_or(HideMode::Alpha);
-    let rect = field(&fields, "rect")
-        .and_then(parse_rect)
+    let mode = entry.mode();
+    let rect = entry
+        .rect()
+        .map(|(left, top, right, bottom)| RECT {
+            left,
+            top,
+            right,
+            bottom,
+        })
         .unwrap_or_else(|| window_rect(hwnd));
-    let opacity = field(&fields, "opacity").and_then(|v| v.parse::<u64>().ok());
+    let opacity = entry.number("opacity");
 
     Some(Hidden {
         snap: Snapshot {
@@ -278,20 +240,5 @@ mod tests {
         assert_eq!(opacity_value(0), 0);
         assert_eq!(opacity_value(255), 0xffff_ffff);
         assert_eq!(opacity_value(128), 128 * 0xffff_ffff / 255);
-    }
-
-    #[test]
-    fn parse_rect_reads_four_numbers() {
-        let r = parse_rect("10,20,30,40").unwrap();
-        assert_eq!((r.left, r.top, r.right, r.bottom), (10, 20, 30, 40));
-        assert!(parse_rect("1,2,3").is_none());
-        assert!(parse_rect("a,b,c,d").is_none());
-    }
-
-    #[test]
-    fn field_lookup_works() {
-        let fields = [("hwnd", "0x2a"), ("mode", "alpha")];
-        assert_eq!(field(&fields, "hwnd"), Some("0x2a"));
-        assert_eq!(field(&fields, "missing"), None);
     }
 }

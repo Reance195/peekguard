@@ -14,6 +14,7 @@ mod autostart;
 mod config;
 #[cfg(windows)]
 mod hide;
+mod hide_common;
 mod hotkey;
 #[cfg(windows)]
 mod icon;
